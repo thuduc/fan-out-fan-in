@@ -27,7 +27,7 @@
 
 ## 3. Redis Topology
 ### 3.1 Streams (all capped via `XTRIM` policies)
-- `stream:request:ingest`: ingress events from upstream producers; consumed by Main Orchestrator using consumer group `fargate-main`.
+- `stream:request:ingest`: ingress events from upstream producers; consumed by Main Orchestrator using consumer group `orchestrator-main`.
 - `stream:request:lifecycle`: state changes for requests (`received`, `started`, `group_completed`, `succeeded`, `failed`, etc.); multiple subscribers.
 - `stream:task:dispatch`: queue of individual task execution requests; consumed by Lambda poller consumer group `task-workers`.
 - `stream:task:updates`: completion/error events from task processors; read by request-scoped consumer groups (`req::<requestId>`), and optionally by observability tooling.
@@ -87,7 +87,7 @@
 - Lambda idempotency: each task result write includes `eTag` or `attempt` to prevent overwriting success with stale retry data.
 
 ## 7. Scalability & Throughput
-- Main Orchestrator horizontally scales via ECS service count; all instances share consumer group `fargate-main` to distribute request ingestion load.
+- Main Orchestrator horizontally scales via ECS service count; all instances share consumer group `orchestrator-main` to distribute request ingestion load.
 - Request Orchestrator Lambdas scale per request; concurrency limits tuned via account settings.
 - Task Lambdas scale with stream backlog; ensure sufficient concurrency settings and use batching (e.g., poll 10 entries).
 - Redis cluster should use replication/sharding (Redis Enterprise or Elasticache) with stream key hashing to balance slots (`hash tags` like `{request:<id>}`).
