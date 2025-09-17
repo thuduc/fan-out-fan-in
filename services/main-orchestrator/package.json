@@ -1,0 +1,14 @@
+{
+  "name": "main-orchestrator",
+  "version": "1.0.0",
+  "description": "Main orchestrator microservice for Redis-driven XML request processing",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
