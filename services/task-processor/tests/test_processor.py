@@ -84,6 +84,8 @@ class TaskProcessorIntegrationTests(unittest.TestCase):
         updates = self.redis.xrange(TASK_UPDATES_STREAM, '-', '+')
         update = fields_to_dict(updates[0])
         self.assertEqual(update['status'], 'failed')
+        failure = self.redis.get('cache:request:req-2:failure')
+        self.assertIsNotNone(failure)
 
 
 if __name__ == '__main__':  # pragma: no cover

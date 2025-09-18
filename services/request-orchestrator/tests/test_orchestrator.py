@@ -1,6 +1,5 @@
 import json
 import os
-import threading
 import unittest
 
 from redis import Redis
@@ -8,9 +7,9 @@ from redis import Redis
 from app.orchestrator import RequestOrchestrator
 from app.constants import (
     REQUEST_LIFECYCLE_STREAM,
-    TASK_DISPATCH_STREAM,
     TASK_UPDATES_STREAM,
 )
+from app.processor import TaskProcessor
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/14")
 
@@ -23,7 +22,9 @@ class RequestOrchestratorIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.redis = create_redis()
         self.redis.flushdb()
-        self.orchestrator = RequestOrchestrator(self.redis)
+        processor = TaskProcessor(self.redis)
+        self.invoker = _InlineTaskInvoker(processor)
+        self.orchestrator = RequestOrchestrator(self.redis, task_invoker=self.invoker)
 
     def tearDown(self):
         try:
@@ -43,16 +44,11 @@ class RequestOrchestratorIntegrationTests(unittest.TestCase):
         )
         self.redis.set(xml_key, xml)
 
-        stop_worker, worker_thread = self._start_worker(task_count=3)
-
         response = self.orchestrator.run({
             "requestId": request_id,
             "xmlKey": xml_key,
             "responseKey": response_key,
         })
-
-        stop_worker.set()
-        worker_thread.join(timeout=1)
 
         self.assertEqual(response["responseKey"], response_key)
         stored_response = self.redis.get(response_key)
@@ -76,83 +72,31 @@ class RequestOrchestratorIntegrationTests(unittest.TestCase):
         )
         self.redis.set(xml_key, xml)
 
-        stop_worker, worker_thread = self._start_failure_worker()
-
         with self.assertRaises(RuntimeError):
-            self.orchestrator.run({
+            RequestOrchestrator(self.redis, task_invoker=_FailingInvoker()).run({
                 "requestId": request_id,
                 "xmlKey": xml_key,
             })
 
-        stop_worker.set()
-        worker_thread.join(timeout=1)
+        failure_payload = self.redis.get(f"cache:request:{request_id}:failure")
+        self.assertIsNotNone(failure_payload)
 
     # ------------------------------------------------------------------
 
-    def _start_worker(self, task_count):
-        stop_event = threading.Event()
 
-        def _worker():
-            stream_state = {TASK_DISPATCH_STREAM: '0-0'}
-            processed = 0
-            while not stop_event.is_set() and processed < task_count:
-                entries = self.redis.xread(stream_state, count=task_count, block=200)
-                if not entries:
-                    continue
-                for stream_name, messages in entries:
-                    if stream_name != TASK_DISPATCH_STREAM:
-                        continue
-                    for message_id, values in messages:
-                        stream_state[TASK_DISPATCH_STREAM] = message_id
-                        processed += 1
-                        result_key = values['resultKey']
-                        self.redis.set(result_key, json.dumps({'processed': processed}))
-                        update = {
-                            'requestId': values['requestId'],
-                            'groupIdx': values['groupIdx'],
-                            'taskId': values['taskId'],
-                            'resultKey': result_key,
-                            'status': 'completed',
-                            'attempt': values.get('attempt', '1'),
-                            'result': json.dumps({'processed': processed}),
-                        }
-                        self.redis.xadd(TASK_UPDATES_STREAM, update)
-            stop_event.set()
+class _InlineTaskInvoker:
+    def __init__(self, processor: TaskProcessor):
+        self._processor = processor
+        self.invocations = []
 
-        thread = threading.Thread(target=_worker, daemon=True)
-        thread.start()
-        return stop_event, thread
+    def invoke_async(self, payload: dict) -> None:
+        self.invocations.append(payload)
+        self._processor.handle_dispatch({"values": payload})
 
-    def _start_failure_worker(self):
-        stop_event = threading.Event()
 
-        def _worker():
-            stream_state = {TASK_DISPATCH_STREAM: '0-0'}
-            sent_failure = False
-            while not stop_event.is_set() and not sent_failure:
-                entries = self.redis.xread(stream_state, count=1, block=200)
-                if not entries:
-                    continue
-                for _, messages in entries:
-                    for message_id, values in messages:
-                        stream_state[TASK_DISPATCH_STREAM] = message_id
-                        update = {
-                            'requestId': values['requestId'],
-                            'groupIdx': values['groupIdx'],
-                            'taskId': values['taskId'],
-                            'resultKey': values['resultKey'],
-                            'status': 'failed',
-                            'attempt': '3',
-                            'result': json.dumps({'error': 'forced'}),
-                        }
-                        self.redis.xadd(TASK_UPDATES_STREAM, update)
-                        sent_failure = True
-                        break
-            stop_event.set()
-
-        thread = threading.Thread(target=_worker, daemon=True)
-        thread.start()
-        return stop_event, thread
+class _FailingInvoker:
+    def invoke_async(self, payload: dict) -> None:  # pylint: disable=unused-argument
+        raise RuntimeError('forced-failure')
 
 
 if __name__ == '__main__':  # pragma: no cover

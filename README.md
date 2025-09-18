@@ -17,7 +17,7 @@ After review of the API_REQUIREMENTS.md, we proceeded with the implementation us
 - Go ahead and implement the design specified in API_REQUIREMENTS.md fully
 
 ## Running the Express API
-The API lives under `services/main-orchestrator` and exposes the valuation endpoints documented in `API_DESIGN.md`. It currently boots with an in-memory Redis shim so you can exercise the HTTP contract without any external services. Replace the shim with a real Redis client before deploying.
+The API lives under `services/main-orchestrator` and exposes the valuation endpoints documented in `API_DESIGN.md`. It expects a Redis instance (configure via `REDIS_URL`) for request state and lifecycle coordination.
 
 1. Install Node.js 20.x and ensure it is the active runtime.
 2. From the repository root run:

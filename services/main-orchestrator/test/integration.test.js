@@ -20,9 +20,7 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 
 const REQUEST_PYTHON = resolvePythonExecutable('request-orchestrator');
-const TASK_PYTHON = resolvePythonExecutable('task-processor');
 const REQUEST_RUNNER = path.join(repoRoot, 'services/request-orchestrator/app/local_runner.py');
-const TASK_WORKER = path.join(repoRoot, 'services/task-processor/app/worker_loop.py');
 const REQUEST_XML_PATH = path.join(repoRoot, 'request.xml');
 
 const REDIS_URL = resolveTestRedisUrl(15);
@@ -93,8 +91,6 @@ async function createHarness(t) {
 
   await redisMain.flushdb();
 
-  const taskWorker = spawnPython(TASK_PYTHON, [TASK_WORKER, REDIS_URL]);
-
   const logger = createNullLogger();
   const requestInvoker = new LocalRequestInvoker({ redisUrl: REDIS_URL });
   const stateRepository = new RequestStateRepository(redisMain);
@@ -132,7 +128,6 @@ async function createHarness(t) {
       cleanupRedis(redisSubmit),
       cleanupRedis(redisQuery),
     ]);
-    await stopProcess(taskWorker);
   });
 
   return { submissionService, queryService, xml };
@@ -143,14 +138,6 @@ function resolvePythonExecutable(serviceDir) {
   const bin = process.platform === 'win32' ? 'Scripts' : 'bin';
   const exe = process.platform === 'win32' ? 'python.exe' : 'python';
   return path.join(base, bin, exe);
-}
-
-function spawnPython(pythonPath, args) {
-  const child = spawn(pythonPath, args, { stdio: 'inherit' });
-  child.on('error', (error) => {
-    throw error;
-  });
-  return child;
 }
 
 async function runPython(pythonPath, args) {
@@ -165,23 +152,6 @@ async function runPython(pythonPath, args) {
       }
     });
   });
-}
-
-async function stopProcess(child) {
-  if (!child || child.killed) {
-    return;
-  }
-  const exitPromise = new Promise((resolve) => {
-    child.once('exit', () => resolve());
-  });
-  child.kill('SIGINT');
-  const timeout = setTimeout(() => {
-    if (!child.killed) {
-      child.kill('SIGKILL');
-    }
-  }, 2000);
-  await exitPromise;
-  clearTimeout(timeout);
 }
 
 async function cleanupRedis(client) {

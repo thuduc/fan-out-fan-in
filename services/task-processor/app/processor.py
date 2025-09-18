@@ -40,6 +40,7 @@ class TaskProcessor:
             self.logger.exception("Task processing failed", extra={"taskId": context.task_id})
             failure = {"error": str(exc)}
             self._publish_update(context, "failed", failure)
+            self._record_failure(context, failure)
             raise
 
     def _publish_update(self, context: TaskContext, status: str, payload: Dict[str, object]) -> None:
@@ -55,6 +56,19 @@ class TaskProcessor:
             "result": json.dumps(payload),
         }
         self.redis.xadd(TASK_UPDATES_STREAM, event)
+
+    def _record_failure(self, context: TaskContext, failure: Dict[str, object]) -> None:
+        try:
+            failure_key = f"cache:request:{context.request_id}:failure"
+            enriched = {
+                "taskId": context.task_id,
+                "groupIdx": context.group_index,
+                "attempt": context.attempt,
+                **failure,
+            }
+            self.redis.set(failure_key, json.dumps(enriched))
+        except Exception:  # noqa: BLE001
+            self.logger.warning("Unable to persist failure detail", extra={"taskId": context.task_id})
 
     def _parse_entry(self, entry: Dict[str, str]) -> TaskContext:
         values = entry.get("values", entry)

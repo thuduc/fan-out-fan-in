@@ -3,7 +3,6 @@
 ## API Layer (`services/main-orchestrator`)
 - **Missing Idempotency-Key handling**: API_DESIGN.md §6 calls for optional `Idempotency-Key` support backed by `request:idempotency:<key>` mappings. `requestSubmissionService.js` ignores this header; repeated submissions will produce duplicate work instead of reusing the original `requestId`.
 - **Incomplete XML validation**: API_DESIGN.md §4.1 Step 2 suggests syntactic validation. `httpApp.js` only checks that the payload starts/ends with angle brackets; malformed XML will pass and be rejected later by the orchestrator. Consider attempting a lightweight parse (e.g., `xml2js` in a try/catch) before accepting the request.
-- **Lifecycle-based responses lack failure detail**: `GET /valuation/:id/results` returns a `failure` payload if `cache:request:<id>:failure` exists, but neither the main nor request orchestrator currently create that key. Clients always get `detail: null`, defeating API_DESIGN.md §4.3 Step 3 requirement.
 - **Expired requests return 404 instead of 410**: API_DESIGN.md §4.3 specifies a `410 Gone` when state data has expired. `httpApp.js` responds with `404` even if the absence is due to TTL expiry.
 - **No `Cache-Control` headers on status/result responses**: The design recommends `Cache-Control: no-store` for dynamic endpoints. The Express handlers omit cache directives.
 
@@ -28,7 +27,6 @@
 
 ## Configuration/Operational Concerns
 - **`ENABLE_HTTP` feature flag absent**: API_DESIGN.md §10 proposes gating the HTTP listener behind `ENABLE_HTTP`. `server.js` always starts the Express app and poller.
-- **README out-of-date on Redis usage**: The documentation still references an in-memory shim even though `server.js` now connects to real Redis. Consider updating or the doc will mislead deployers.
 
 ## Testing Coverage Observations
 - **Python “unit” tests are integration-style**: `test_orchestrator.py` and `test_processor.py` hit Redis directly. That matches DESIGN.md’s emphasis on integration coverage but leaves fine-grained unit behavior (e.g., XML parsing helpers) untested.

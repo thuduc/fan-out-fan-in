@@ -12,7 +12,6 @@ from .constants import (
     GROUP_STATE_KEY_TEMPLATE,
     REQUEST_LIFECYCLE_STREAM,
     REQUEST_STATE_KEY_TEMPLATE,
-    TASK_DISPATCH_STREAM,
     TASK_RESULT_KEY_TEMPLATE,
     TASK_UPDATES_STREAM,
     TASK_XML_KEY_TEMPLATE,
@@ -36,9 +35,15 @@ class TaskDescriptor:
 
 
 class RequestOrchestrator:
-    def __init__(self, redis_client, logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        redis_client,
+        logger: Optional[logging.Logger] = None,
+        task_invoker: Optional[object] = None,
+    ):
         self.redis = redis_client
         self.logger = logger or LOGGER
+        self.task_invoker = task_invoker
 
     def run(self, event: Dict[str, str]) -> Dict[str, str]:
         request_id = event["requestId"]
@@ -62,18 +67,31 @@ class RequestOrchestrator:
         aggregated_results: Dict[int, List[Dict[str, str]]] = {}
         prior_results: Dict[str, Dict[str, str]] = {}
 
-        for index, group in enumerate(groups):
-            aggregated_results[index] = []
-            self._publish_lifecycle(request_id, "group_started", {"group": index})
-            task_descriptors = self._dispatch_group(request_id, index, group, project, prior_results)
-            group_results = self._await_group_completion(request_id, index, task_descriptors)
-            aggregated_results[index] = group_results
-            prior_results.update({task["taskId"]: task for task in group_results})
-            self._publish_lifecycle(request_id, "group_completed", {"group": index})
+        try:
+            for index, group in enumerate(groups):
+                aggregated_results[index] = []
+                self._mark_request_state(request_id, currentGroup=index, status="running")
+                self._publish_lifecycle(request_id, "group_started", {"group": index})
+                task_descriptors = self._dispatch_group(request_id, index, group, project, prior_results)
+                group_results = self._await_group_completion(request_id, index, task_descriptors)
+                aggregated_results[index] = group_results
+                prior_results.update({task["taskId"]: task for task in group_results})
+                self._publish_lifecycle(request_id, "group_completed", {"group": index})
+        except Exception as exc:  # noqa: BLE001
+            self._record_request_failure(request_id, {
+                "error": str(exc),
+                "stage": "group_processing",
+            })
+            raise
 
         response_xml = self._build_response_xml(request_id, aggregated_results)
         self.redis.set(response_key, response_xml)
-        self._update_request_state(request_id, status="succeeded", response_key=response_key)
+        self._mark_request_state(
+            request_id,
+            status="succeeded",
+            response_key=response_key,
+            completedAt=_now_iso(),
+        )
         self._publish_lifecycle(request_id, "completed", {"responseKey": response_key})
         return {"responseKey": response_key, "groupCount": group_count}
 
@@ -137,7 +155,7 @@ class RequestOrchestrator:
                 "resultKey": result_key,
                 "attempt": "1",
             }
-            self.redis.xadd(TASK_DISPATCH_STREAM, dispatch_payload)
+            self._invoke_task_processor(dispatch_payload)
             descriptors.append(TaskDescriptor(
                 request_id=request_id,
                 group_index=group_index,
@@ -249,6 +267,10 @@ class RequestOrchestrator:
                     self.redis.xack(TASK_UPDATES_STREAM, consumer_group, message_id)
 
             if pending_failures:
+                self._record_request_failure(request_id, {
+                    "group": group_index,
+                    "failures": pending_failures,
+                })
                 raise RuntimeError(f"Group {group_index} failed: {pending_failures}")
 
         self.redis.hset(
@@ -276,12 +298,42 @@ class RequestOrchestrator:
                 payload["stored"] = stored_result
         return payload
 
+    def _invoke_task_processor(self, payload: Dict[str, str]) -> None:
+        if not self.task_invoker:
+            raise RuntimeError("Task invoker is not configured")
+        try:
+            self.task_invoker.invoke_async(payload)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error("Failed to invoke task processor", extra={"payload": payload, "error": str(exc)})
+            raise
+
     def _enqueue_retry(self, values: Dict[str, str], attempt: int) -> None:
         retry_payload = dict(values)
         retry_payload["attempt"] = str(attempt)
-        self.redis.xadd(TASK_DISPATCH_STREAM, retry_payload)
+        self._invoke_task_processor(retry_payload)
 
-    # --- Lifecycle & state -----------------------------------------------------------------
+    def _mark_request_state(self, request_id: str, **fields: object) -> None:
+        if not fields:
+            return
+        key = REQUEST_STATE_KEY_TEMPLATE.format(request_id=request_id)
+        serialised = {}
+        for name, value in fields.items():
+            if isinstance(value, (dict, list)):
+                serialised[name] = json.dumps(value)
+            else:
+                serialised[name] = value
+        self.redis.hset(key, mapping=serialised)
+
+    def _record_request_failure(self, request_id: str, detail: Dict[str, object]) -> None:
+        failure_key = f"cache:request:{request_id}:failure"
+        try:
+            self.redis.set(failure_key, json.dumps(detail))
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("Unable to persist failure detail", extra={"error": str(exc), "detail": detail})
+        self._mark_request_state(request_id, status="failed", failureAt=_now_iso())
+        self._publish_lifecycle(request_id, "failed", {"detail": json.dumps(detail)})
+
+    # --- Lifecycle & state ---------------------------------------------------------------
 
     def _ensure_updates_consumer_group(self, request_id: str) -> None:
         group = self._consumer_group_name(request_id)
@@ -325,3 +377,7 @@ class RequestOrchestrator:
                     child = ET.SubElement(task_node, key)
                     child.text = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
         return ET.tostring(root, encoding="unicode")
+
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

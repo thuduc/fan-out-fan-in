@@ -1,5 +1,4 @@
 REQUEST_LIFECYCLE_STREAM = "stream:request:lifecycle"
-TASK_DISPATCH_STREAM = "stream:task:dispatch"
 TASK_UPDATES_STREAM = "stream:task:updates"
 REQUEST_STATE_KEY_TEMPLATE = "state:request:{request_id}"
 GROUP_STATE_KEY_TEMPLATE = "state:request:{request_id}:group:{group_index}"
