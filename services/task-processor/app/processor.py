@@ -54,7 +54,7 @@ class TaskProcessor:
             "attempt": str(context.attempt),
             "result": json.dumps(payload),
         }
-        self.redis.xadd(TASK_UPDATES_STREAM, "*", event)
+        self.redis.xadd(TASK_UPDATES_STREAM, event)
 
     def _parse_entry(self, entry: Dict[str, str]) -> TaskContext:
         values = entry.get("values", entry)

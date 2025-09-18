@@ -1,5 +1,9 @@
 import json
+import os
+import threading
 import unittest
+
+from redis import Redis
 
 from app.orchestrator import RequestOrchestrator
 from app.constants import (
@@ -8,138 +12,148 @@ from app.constants import (
     TASK_UPDATES_STREAM,
 )
 
-
-class FakeRedis:
-    def __init__(self):
-        self.kv = {}
-        self.hashes = {}
-        self.streams = {}
-        self.groups = set()
-        self.acks = []
-        self.pending_updates = []
-
-    def get(self, key):
-        return self.kv.get(key)
-
-    def set(self, key, value):
-        self.kv[key] = value
-
-    def hset(self, key, mapping):
-        current = self.hashes.setdefault(key, {})
-        current.update(mapping)
-
-    def xadd(self, stream, _id, values):
-        entries = self.streams.setdefault(stream, [])
-        entry_id = f"{len(entries) + 1}-0"
-        entries.append({"id": entry_id, "values": values})
-        return entry_id
-
-    def xgroupCreate(self, stream, group, _id, options=None):  # noqa: N802
-        key = (stream, group)
-        if key in self.groups:
-            raise Exception("BUSYGROUP")
-        self.groups.add(key)
-        self.streams.setdefault(stream, [])
-
-    def xreadgroup(self, params):
-        if not self.pending_updates:
-            return []
-        entry = self.pending_updates.pop(0)
-        # ensure result data is available
-        result_key = entry["values"].get("resultKey")
-        if result_key and result_key not in self.kv:
-            self.kv[result_key] = json.dumps({"origin": "test"})
-        return [entry]
-
-    def xack(self, stream, group, entry_id):
-        self.acks.append((stream, group, entry_id))
+REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/14")
 
 
-class RequestOrchestratorTests(unittest.TestCase):
+def create_redis():
+    return Redis.from_url(REDIS_URL, decode_responses=True)
+
+
+class RequestOrchestratorIntegrationTests(unittest.TestCase):
     def setUp(self):
-        self.redis = FakeRedis()
+        self.redis = create_redis()
+        self.redis.flushdb()
         self.orchestrator = RequestOrchestrator(self.redis)
 
+    def tearDown(self):
+        try:
+            self.redis.flushdb()
+        finally:
+            self.redis.close()
+
     def test_full_happy_path(self):
-        xml = """<req><project><market name='m1'/><model name='mod1'/><group name='g1'>\n        <valuation name='security'><instrument ref-name='i1'/></valuation></group>\n        <group name='g2'><valuation name='schedule'><instrument ref-name='i2'/></valuation>\n        <valuation name='analytics'><instrument ref-name='i2'/></valuation></group></project></req>"""
-        self.redis.set("cache:request:req-1:xml", xml)
+        request_id = "req-integration-1"
+        xml_key = f"cache:request:{request_id}:xml"
+        response_key = f"cache:request:{request_id}:response"
+        xml = (
+            "<req><project><market name='m1'/><model name='mod1'/><group name='g1'>"
+            "<valuation name='security'><instrument ref-name='i1'/></valuation></group>"
+            "<group name='g2'><valuation name='schedule'><instrument ref-name='i2'/></valuation>"
+            "<valuation name='analytics'><instrument ref-name='i2'/></valuation></group></project></req>"
+        )
+        self.redis.set(xml_key, xml)
 
-        # enqueue updates for three tasks
-        self.redis.pending_updates.extend([
-            {
-                "id": "1-0",
-                "values": {
-                    "requestId": "req-1",
-                    "groupIdx": "0",
-                    "taskId": "g1-t1-security",
-                    "status": "completed",
-                    "resultKey": "cache:task:req-1:0:g1-t1-security:result",
-                    "result": json.dumps({"score": 10}),
-                }
-            },
-            {
-                "id": "2-0",
-                "values": {
-                    "requestId": "req-1",
-                    "groupIdx": "1",
-                    "taskId": "g2-t1-schedule",
-                    "status": "completed",
-                    "resultKey": "cache:task:req-1:1:g2-t1-schedule:result",
-                    "result": json.dumps({"score": 20}),
-                }
-            },
-            {
-                "id": "3-0",
-                "values": {
-                    "requestId": "req-1",
-                    "groupIdx": "1",
-                    "taskId": "g2-t2-analytics",
-                    "status": "completed",
-                    "resultKey": "cache:task:req-1:1:g2-t2-analytics:result",
-                    "result": json.dumps({"score": 30}),
-                }
-            },
-        ])
+        stop_worker, worker_thread = self._start_worker(task_count=3)
 
-        event = {
-            "requestId": "req-1",
-            "xmlKey": "cache:request:req-1:xml",
-            "responseKey": "cache:request:req-1:response",
-        }
+        response = self.orchestrator.run({
+            "requestId": request_id,
+            "xmlKey": xml_key,
+            "responseKey": response_key,
+        })
 
-        response = self.orchestrator.run(event)
+        stop_worker.set()
+        worker_thread.join(timeout=1)
 
-        self.assertEqual(response["responseKey"], "cache:request:req-1:response")
-        response_xml = self.redis.get("cache:request:req-1:response")
-        self.assertIn("<response", response_xml)
-        self.assertIn("task", response_xml)
-        self.assertTrue(self.redis.streams[TASK_DISPATCH_STREAM])
-        lifecycle_events = self.redis.streams[REQUEST_LIFECYCLE_STREAM]
-        statuses = [entry["values"]["status"] for entry in lifecycle_events]
-        self.assertIn("started", statuses)
-        self.assertIn("completed", statuses)
+        self.assertEqual(response["responseKey"], response_key)
+        stored_response = self.redis.get(response_key)
+        self.assertIn("<response", stored_response)
+
+        lifecycle_entries = self.redis.xrange(REQUEST_LIFECYCLE_STREAM, '-', '+')
+        statuses = []
+        for _, fields in lifecycle_entries:
+            status = fields.get('status') if isinstance(fields, dict) else None
+            if status:
+                statuses.append(status)
+        self.assertIn('started', statuses)
+        self.assertIn('completed', statuses)
 
     def test_group_failure_raises(self):
-        xml = """<req><project><group name='g1'>\n        <valuation name='security'><instrument ref-name='i1'/></valuation></group></project></req>"""
-        self.redis.set("cache:request:req-2:xml", xml)
-        self.redis.pending_updates.append({
-            "id": "1-0",
-            "values": {
-                "requestId": "req-2",
-                "groupIdx": "0",
-                "taskId": "g1-t1-security",
-                "status": "failed",
-                "attempt": "3",
-                "resultKey": "cache:task:req-2:0:g1-t1-security:result",
-            }
-        })
-        event = {
-            "requestId": "req-2",
-            "xmlKey": "cache:request:req-2:xml",
-        }
+        request_id = "req-integration-2"
+        xml_key = f"cache:request:{request_id}:xml"
+        xml = (
+            "<req><project><group name='g1'>"
+            "<valuation name='security'><instrument ref-name='i1'/></valuation></group></project></req>"
+        )
+        self.redis.set(xml_key, xml)
+
+        stop_worker, worker_thread = self._start_failure_worker()
+
         with self.assertRaises(RuntimeError):
-            self.orchestrator.run(event)
+            self.orchestrator.run({
+                "requestId": request_id,
+                "xmlKey": xml_key,
+            })
+
+        stop_worker.set()
+        worker_thread.join(timeout=1)
+
+    # ------------------------------------------------------------------
+
+    def _start_worker(self, task_count):
+        stop_event = threading.Event()
+
+        def _worker():
+            stream_state = {TASK_DISPATCH_STREAM: '0-0'}
+            processed = 0
+            while not stop_event.is_set() and processed < task_count:
+                entries = self.redis.xread(stream_state, count=task_count, block=200)
+                if not entries:
+                    continue
+                for stream_name, messages in entries:
+                    if stream_name != TASK_DISPATCH_STREAM:
+                        continue
+                    for message_id, values in messages:
+                        stream_state[TASK_DISPATCH_STREAM] = message_id
+                        processed += 1
+                        result_key = values['resultKey']
+                        self.redis.set(result_key, json.dumps({'processed': processed}))
+                        update = {
+                            'requestId': values['requestId'],
+                            'groupIdx': values['groupIdx'],
+                            'taskId': values['taskId'],
+                            'resultKey': result_key,
+                            'status': 'completed',
+                            'attempt': values.get('attempt', '1'),
+                            'result': json.dumps({'processed': processed}),
+                        }
+                        self.redis.xadd(TASK_UPDATES_STREAM, update)
+            stop_event.set()
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+        return stop_event, thread
+
+    def _start_failure_worker(self):
+        stop_event = threading.Event()
+
+        def _worker():
+            stream_state = {TASK_DISPATCH_STREAM: '0-0'}
+            sent_failure = False
+            while not stop_event.is_set() and not sent_failure:
+                entries = self.redis.xread(stream_state, count=1, block=200)
+                if not entries:
+                    continue
+                for _, messages in entries:
+                    for message_id, values in messages:
+                        stream_state[TASK_DISPATCH_STREAM] = message_id
+                        update = {
+                            'requestId': values['requestId'],
+                            'groupIdx': values['groupIdx'],
+                            'taskId': values['taskId'],
+                            'resultKey': values['resultKey'],
+                            'status': 'failed',
+                            'attempt': '3',
+                            'result': json.dumps({'error': 'forced'}),
+                        }
+                        self.redis.xadd(TASK_UPDATES_STREAM, update)
+                        sent_failure = True
+                        break
+            stop_event.set()
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+        return stop_event, thread
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':  # pragma: no cover
     unittest.main()

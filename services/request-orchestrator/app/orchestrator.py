@@ -112,7 +112,7 @@ class RequestOrchestrator:
         valuations = group.get("valuations", [])
         expected = len(valuations)
         group_key = GROUP_STATE_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index)
-        self.redis.hset(group_key, {
+        self.redis.hset(group_key, mapping={
             "expected": expected,
             "completed": 0,
             "failed": 0,
@@ -137,7 +137,7 @@ class RequestOrchestrator:
                 "resultKey": result_key,
                 "attempt": "1",
             }
-            self.redis.xadd(TASK_DISPATCH_STREAM, "*", dispatch_payload)
+            self.redis.xadd(TASK_DISPATCH_STREAM, dispatch_payload)
             descriptors.append(TaskDescriptor(
                 request_id=request_id,
                 group_index=group_index,
@@ -186,64 +186,74 @@ class RequestOrchestrator:
             if time.time() > deadline:
                 raise TimeoutError(f"Timed out waiting for group {group_index} completion")
 
-            entries = self.redis.xreadgroup({
-                "stream": TASK_UPDATES_STREAM,
-                "group": consumer_group,
-                "consumer": consumer,
-                "count": expected,
-                "block": DEFAULT_BLOCK_MS,
-            })
+            entries = self.redis.xreadgroup(
+                groupname=consumer_group,
+                consumername=consumer,
+                streams={TASK_UPDATES_STREAM: '>'},
+                count=expected,
+                block=DEFAULT_BLOCK_MS,
+            )
             if not entries:
                 continue
 
-            for entry in entries:
-                values = entry.get("values", {})
-                entry_request_id = values.get("requestId")
-                if entry_request_id != request_id:
-                    self.redis.xack(TASK_UPDATES_STREAM, consumer_group, entry.get("id"))
+            for stream_name, messages in entries:
+                if stream_name != TASK_UPDATES_STREAM:
                     continue
-                entry_group = int(values.get("groupIdx", "-1"))
-                if entry_group != group_index:
-                    # Another group's event; only ack when orchestrator for that group will see it.
-                    # Re-add to stream by ignoring ack so it remains pending.
-                    continue
-
-                status = values.get("status")
-                task_id = values.get("taskId")
-                descriptor = descriptor_by_task.get(task_id)
-                if descriptor is None:
-                    self.redis.xack(TASK_UPDATES_STREAM, consumer_group, entry.get("id"))
-                    continue
-
-                if status == "completed":
-                    result_payload = self._extract_result_payload(values)
-                    completed.append({
-                        "taskId": task_id,
-                        "resultKey": descriptor.result_key,
-                        "result": result_payload,
-                    })
-                    self.redis.hset(
-                        GROUP_STATE_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index),
-                        {"completed": len(completed)}
-                    )
-                elif status == "failed":
-                    attempt_value = int(values.get("attempt", values.get("attempts", "1")))
-                    if attempt_value < MAX_TASK_RETRIES:
-                        self._enqueue_retry(values, attempt_value + 1)
+                for message_id, raw_values in messages:
+                    if isinstance(raw_values, dict):
+                        values = raw_values
                     else:
-                        pending_failures.append(values)
+                        values = {}
+                        for idx in range(0, len(raw_values), 2):
+                            field = raw_values[idx]
+                            value = raw_values[idx + 1] if idx + 1 < len(raw_values) else None
+                            values[field] = value
+
+                    entry_request_id = values.get("requestId")
+                    if entry_request_id != request_id:
+                        self.redis.xack(TASK_UPDATES_STREAM, consumer_group, message_id)
+                        continue
+                    entry_group = int(values.get("groupIdx", "-1"))
+                    if entry_group != group_index:
+                        # Another group's event; leave pending for the owning orchestrator instance
+                        continue
+
+                    status = values.get("status")
+                    task_id = values.get("taskId")
+                    descriptor = descriptor_by_task.get(task_id)
+                    if descriptor is None:
+                        self.redis.xack(TASK_UPDATES_STREAM, consumer_group, message_id)
+                        continue
+
+                    if status == "completed":
+                        result_payload = self._extract_result_payload(values)
+                        completed.append({
+                            "taskId": task_id,
+                            "resultKey": descriptor.result_key,
+                            "result": result_payload,
+                        })
                         self.redis.hset(
                             GROUP_STATE_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index),
-                            {"failed": len(pending_failures)}
+                            mapping={"completed": len(completed)}
                         )
-                self.redis.xack(TASK_UPDATES_STREAM, consumer_group, entry.get("id"))
+                    elif status == "failed":
+                        attempt_value = int(values.get("attempt", values.get("attempts", "1")))
+                        if attempt_value < MAX_TASK_RETRIES:
+                            self._enqueue_retry(values, attempt_value + 1)
+                        else:
+                            pending_failures.append(values)
+                            self.redis.hset(
+                                GROUP_STATE_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index),
+                                mapping={"failed": len(pending_failures)}
+                            )
+                    self.redis.xack(TASK_UPDATES_STREAM, consumer_group, message_id)
 
             if pending_failures:
                 raise RuntimeError(f"Group {group_index} failed: {pending_failures}")
 
         self.redis.hset(
             GROUP_STATE_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index),
-            {"status": "completed"}
+            mapping={"status": "completed"}
         )
         return completed
 
@@ -269,7 +279,7 @@ class RequestOrchestrator:
     def _enqueue_retry(self, values: Dict[str, str], attempt: int) -> None:
         retry_payload = dict(values)
         retry_payload["attempt"] = str(attempt)
-        self.redis.xadd(TASK_DISPATCH_STREAM, "*", retry_payload)
+        self.redis.xadd(TASK_DISPATCH_STREAM, retry_payload)
 
     # --- Lifecycle & state -----------------------------------------------------------------
 
@@ -296,12 +306,12 @@ class RequestOrchestrator:
         if extra:
             for key, value in extra.items():
                 payload[key] = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
-        self.redis.xadd(REQUEST_LIFECYCLE_STREAM, "*", payload)
+        self.redis.xadd(REQUEST_LIFECYCLE_STREAM, payload)
 
     def _update_request_state(self, request_id: str, **fields: object) -> None:
         key = REQUEST_STATE_KEY_TEMPLATE.format(request_id=request_id)
         serialized = {k: json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in fields.items()}
-        self.redis.hset(key, serialized)
+        self.redis.hset(key, mapping=serialized)
 
     def _build_response_xml(self, request_id: str, grouped_results: Dict[int, List[Dict[str, str]]]) -> str:
         root = ET.Element("response", attrib={"requestId": request_id})

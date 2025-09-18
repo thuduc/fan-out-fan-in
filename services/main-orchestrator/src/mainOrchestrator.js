@@ -8,6 +8,7 @@ import {
   ensureString,
   ensureNumber,
   generateExecutionToken,
+  xreadgroupStream,
 } from './utils.js';
 
 export class MainOrchestrator {
@@ -24,12 +25,17 @@ export class MainOrchestrator {
   }
 
   async ensureConsumerGroup() {
-    if (typeof this.redis.xgroupCreate !== 'function') {
-      this.logger.warn?.('redis client does not support xgroupCreate; skipping group creation');
-      return;
-    }
     try {
-      await this.redis.xgroupCreate(REQUEST_STREAM, REQUEST_CONSUMER_GROUP, '0', { MKSTREAM: true });
+      if (typeof this.redis.xgroupCreate === 'function') {
+        await this.redis.xgroupCreate(REQUEST_STREAM, REQUEST_CONSUMER_GROUP, '0', { MKSTREAM: true });
+      } else if (typeof this.redis.xgroup === 'function') {
+        await this.redis.xgroup('CREATE', REQUEST_STREAM, REQUEST_CONSUMER_GROUP, '0', 'MKSTREAM');
+      } else if (typeof this.redis.call === 'function') {
+        await this.redis.call('XGROUP', 'CREATE', REQUEST_STREAM, REQUEST_CONSUMER_GROUP, '0', 'MKSTREAM');
+      } else {
+        this.logger.warn?.('redis client cannot create consumer groups; skipping');
+        return;
+      }
     } catch (error) {
       if (!this._isBusyGroupError(error)) {
         throw error;
@@ -41,7 +47,7 @@ export class MainOrchestrator {
     await this.ensureConsumerGroup();
     this.stopped = false;
     while (!this.stopped) {
-      const response = await this.redis.xreadgroup({
+      const response = await xreadgroupStream(this.redis, {
         stream: REQUEST_STREAM,
         group: REQUEST_CONSUMER_GROUP,
         consumer: REQUEST_CONSUMER_NAME,
@@ -51,6 +57,7 @@ export class MainOrchestrator {
       if (!response || response.length === 0) {
         continue;
       }
+      this.logger.info(`Got response.length=${response.length}`);
       for (const entry of response) {
         try {
           await this._processEntry(entry);
@@ -85,6 +92,7 @@ export class MainOrchestrator {
       groupCount: envelope.groupCount,
       executionToken: generateExecutionToken(),
     });
+    this.logger.info?.(`Acknowledge response REQUEST_STREAM=${REQUEST_STREAM}, REQUEST_CONSUMER_GROUP=${REQUEST_CONSUMER_GROUP}, entry.id=${entry.id}`);
     await this.redis.xack(REQUEST_STREAM, REQUEST_CONSUMER_GROUP, entry.id);
   }
 

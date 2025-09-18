@@ -1,5 +1,5 @@
 import { LIFECYCLE_STREAM } from './constants.js';
-import { nowIso, serializeLifecycleEvent } from './utils.js';
+import { nowIso, serializeLifecycleEvent, xadd } from './utils.js';
 
 export class LifecyclePublisher {
   constructor(redis) {
@@ -14,6 +14,6 @@ export class LifecyclePublisher {
       ...details,
     };
     const payload = serializeLifecycleEvent(event);
-    await this.redis.xadd(LIFECYCLE_STREAM, '*', payload);
+    await xadd(this.redis, LIFECYCLE_STREAM, '*', payload);
   }
 }
