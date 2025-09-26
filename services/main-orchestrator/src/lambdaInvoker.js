@@ -1,4 +1,3 @@
-import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { INVOCATION_TIMEOUT_MS } from './constants.js';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 

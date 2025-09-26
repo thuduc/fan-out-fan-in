@@ -1,8 +1,11 @@
 import json
 import logging
+import subprocess
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Optional
+
 from lxml import etree
 
 from .constants import TASK_UPDATES_STREAM
@@ -23,9 +26,11 @@ class TaskContext:
 
 
 class TaskProcessor:
-    def __init__(self, redis_client, logger: Optional[logging.Logger] = None):
+    def __init__(self, redis_client, logger: Optional[logging.Logger] = None, vnas_script: Optional[str] = None):
         self.redis = redis_client
         self.logger = logger or LOGGER
+        default_script = Path(__file__).resolve().parent / 'vnas.sh'
+        self._vnas_script = Path(vnas_script).resolve() if vnas_script else default_script
 
     def handle_dispatch(self, entry: Dict[str, str]) -> Dict[str, str]:
         context = self._parse_entry(entry)
@@ -95,38 +100,27 @@ class TaskProcessor:
         valuation_element = etree.fromstring(xml_payload.encode("UTF-8"))
         amount_nodes = valuation_element.xpath(".//analytics/price/amount")
         if amount_nodes:
-            amount_nodes[0].text = "100.00"
+            amount_nodes[0].text = self._generate_amount()
         return etree.tostring(valuation_element, encoding="UTF-8").decode("UTF-8")
 
-    def _execute_task_old(self, xml_payload: str) -> Dict[str, object]:
-        root = ET.fromstring(xml_payload)
-        valuation = root.find("valuation")
-        if valuation is None:
-            raise ValueError("Invalid task XML: missing valuation")
-        valuation_name = valuation.get("name", "unknown")
-        instrument = valuation.find("instrument")
-        instrument_name = instrument.get("ref-name") if instrument is not None else "unknown"
+    def _generate_amount(self) -> str:
+        try:
+            completed = subprocess.run(
+                [str(self._vnas_script)],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:  # noqa: PERF203
+            raise RuntimeError("Failed to invoke valuation number generator") from exc
 
-        metrics = {}
-        for amount_node in root.findall(".//amount"):
-            metric_name = amount_node.tag
-            try:
-                metrics.setdefault(metric_name, 0.0)
-                metrics[metric_name] += float(amount_node.text or "0")
-            except ValueError:
-                continue
+        raw_value = completed.stdout.strip()
+        try:
+            amount = float(raw_value)
+        except ValueError as exc:  # pragma: no cover - defensive guard
+            raise RuntimeError("Valuation number generator returned invalid output") from exc
 
-        result = {
-            "valuation": valuation_name,
-            "instrument": instrument_name,
-            "metrics": metrics,
-        }
+        if amount <= 0:
+            raise RuntimeError("Valuation number generator returned non-positive value")
 
-        prior_results_node = root.find("priorResults")
-        if prior_results_node is not None:
-            prior = {}
-            for child in prior_results_node.findall("result"):
-                prior[child.get("taskId", "unknown")] = child.text
-            if prior:
-                result["prior"] = prior
-        return result
+        return f"{amount:.2f}"

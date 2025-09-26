@@ -1,17 +1,36 @@
-import json
+import importlib.util
 import os
+import sys
 import unittest
 
 from redis import Redis
 
+os.environ.setdefault('REDIS_URL', 'redis://127.0.0.1:6379/14')
+
+from app.hydrator import XmlHydrator
 from app.orchestrator import RequestOrchestrator
 from app.constants import (
     REQUEST_LIFECYCLE_STREAM,
     TASK_UPDATES_STREAM,
 )
-from app.processor import TaskProcessor
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/14")
+
+
+def _load_task_processor_cls():
+    """Dynamically load the task processor from the sibling service for tests."""
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'task-processor', 'app'))
+    processor_path = os.path.join(base_dir, 'processor.py')
+    spec = importlib.util.spec_from_file_location('task_processor.test_processor', processor_path)
+    if spec is None or spec.loader is None:
+        raise ImportError('Unable to load task processor module for tests')
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)  # type: ignore[attr-defined]
+    return module.TaskProcessor
+
+
+TaskProcessor = _load_task_processor_cls()
 
 
 def create_redis():
@@ -24,7 +43,7 @@ class RequestOrchestratorIntegrationTests(unittest.TestCase):
         self.redis.flushdb()
         processor = TaskProcessor(self.redis)
         self.invoker = _InlineTaskInvoker(processor)
-        self.orchestrator = RequestOrchestrator(task_invoker=self.invoker)
+        self.orchestrator = RequestOrchestrator(hydrator=XmlHydrator(), task_invoker=self.invoker)
 
     def tearDown(self):
         try:
@@ -73,7 +92,7 @@ class RequestOrchestratorIntegrationTests(unittest.TestCase):
         self.redis.set(xml_key, xml)
 
         with self.assertRaises(RuntimeError):
-            RequestOrchestrator(self.redis, task_invoker=_FailingInvoker()).run({
+            RequestOrchestrator(hydrator=XmlHydrator(), task_invoker=_FailingInvoker()).run({
                 "requestId": request_id,
                 "xmlKey": xml_key,
             })

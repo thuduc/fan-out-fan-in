@@ -1,8 +1,8 @@
-import json
 import os
 import unittest
 
 from redis import Redis
+from lxml import etree
 
 from app.processor import TaskProcessor
 from app.constants import TASK_UPDATES_STREAM
@@ -56,9 +56,17 @@ class TaskProcessorIntegrationTests(unittest.TestCase):
 
         result = self.processor.handle_dispatch(entry)
 
-        stored = json.loads(self.redis.get(result_key))
-        self.assertEqual(stored['valuation'], 'security')
-        self.assertEqual(stored['instrument'], 'i1')
+        stored_xml = self.redis.get(result_key)
+        self.assertIsNotNone(stored_xml)
+        document = etree.fromstring(stored_xml.encode('utf-8'))
+        valuation = document.find('.//valuation')
+        self.assertIsNotNone(valuation)
+        self.assertEqual(valuation.get('name'), 'security')
+        amount = document.find('.//analytics/price/amount')
+        self.assertIsNotNone(amount)
+        generated_value = float(amount.text)
+        self.assertGreaterEqual(generated_value, 50.0)
+        self.assertLessEqual(generated_value, 100.0)
 
         updates = self.redis.xrange(TASK_UPDATES_STREAM, '-', '+')
         update = fields_to_dict(updates[0])
