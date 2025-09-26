@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import os
 import json
 import logging
 import time
 import xml.etree.ElementTree as ET
+from lxml import etree
+import copy
+import redis
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
+
+from .task_invoker import TaskInvoker
+from .hydrator import XmlHydrator
 
 from .constants import (
     GROUP_STATE_KEY_TEMPLATE,
@@ -22,6 +29,13 @@ from .constants import (
 
 LOGGER = logging.getLogger(__name__)
 
+REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379")
+
+def create_redis():
+    return redis.Redis.from_url(REDIS_URL, decode_responses=True)
+
+def close_redis(conn: Optional[redis.Redis]) -> None:
+    conn.close()
 
 @dataclass
 class TaskDescriptor:
@@ -29,7 +43,6 @@ class TaskDescriptor:
     group_index: int
     group_name: str
     task_id: str
-    valuation_name: str
     xml_key: str
     result_key: str
 
@@ -37,46 +50,47 @@ class TaskDescriptor:
 class RequestOrchestrator:
     def __init__(
         self,
-        redis_client,
-        logger: Optional[logging.Logger] = None,
+        hydrator: XmlHydrator,
         task_invoker: Optional[object] = None,
+        logger: Optional[logging.Logger] = None,
     ):
-        self.redis = redis_client
+        self.hydrator = hydrator
         self.logger = logger or LOGGER
         self.task_invoker = task_invoker
+        self.redis = create_redis()
+        self.redis_task_update_stream = create_redis()
 
     def run(self, event: Dict[str, str]) -> Dict[str, str]:
         request_id = event["requestId"]
         xml_key = event["xmlKey"]
         response_key = event.get("responseKey") or f"cache:request:{request_id}:response"
-        metadata_key = event.get("metadataKey")
 
         raw_xml = self.redis.get(xml_key)
         if raw_xml is None:
             raise ValueError(f"Request XML not found for key {xml_key}")
 
-        project = self._parse_project(raw_xml)
-        groups = project.get("groups", [])
-        group_count = len(groups)
+        try:
+            root = etree.fromstring(raw_xml.encode("UTF-8"))
+        except etree.XMLSyntaxError as exc:
+            raise ValueError("Input XML is not well-formed.") from exc
+        
+        project = root.find("project")
+        groups = project.findall("group") if project is not None else []
+        group_count = project.xpath("count(./group)")
 
         self.logger.info("Processing request", extra={"requestId": request_id, "groups": group_count})
         self._ensure_updates_consumer_group(request_id)
         self._update_request_state(request_id, status="started", group_count=group_count)
         self._publish_lifecycle(request_id, "started", {"groupCount": group_count})
 
-        aggregated_results: Dict[int, List[Dict[str, str]]] = {}
-        prior_results: Dict[str, Dict[str, str]] = {}
-
         try:
             for index, group in enumerate(groups):
-                aggregated_results[index] = []
                 self._mark_request_state(request_id, currentGroup=index, status="running")
                 self._publish_lifecycle(request_id, "group_started", {"group": index})
-                task_descriptors = self._dispatch_group(request_id, index, group, project, prior_results)
-                group_results = self._await_group_completion(request_id, index, task_descriptors)
-                aggregated_results[index] = group_results
-                prior_results.update({task["taskId"]: task for task in group_results})
+                task_descriptors = self._dispatch_group(request_id, index, group, root)
+                self._await_group_completion(request_id, index, task_descriptors, group)
                 self._publish_lifecycle(request_id, "group_completed", {"group": index})
+                
         except Exception as exc:  # noqa: BLE001
             self._record_request_failure(request_id, {
                 "error": str(exc),
@@ -84,7 +98,7 @@ class RequestOrchestrator:
             })
             raise
 
-        response_xml = self._build_response_xml(request_id, aggregated_results)
+        response_xml = etree.tostring(root, pretty_print=True, encoding="unicode")
         self.redis.set(response_key, response_xml)
         self._mark_request_state(
             request_id,
@@ -93,41 +107,19 @@ class RequestOrchestrator:
             completedAt=_now_iso(),
         )
         self._publish_lifecycle(request_id, "completed", {"responseKey": response_key})
+
+        # close redis connections
+        close_redis(self.redis)
+        close_redis(self.redis_task_update_stream)
+
         return {"responseKey": response_key, "groupCount": group_count}
-
-    # --- Parsing helpers ------------------------------------------------------------------
-
-    def _parse_project(self, xml: str) -> Dict[str, object]:
-        tree = ET.fromstring(xml)
-        project_element = tree.find("project")
-        if project_element is None:
-            raise ValueError("Invalid XML: missing <project> root")
-
-        groups: List[Dict[str, object]] = []
-        for group_index, group_element in enumerate(project_element.findall("group")):
-            group_name = group_element.get("name") or f"Group{group_index + 1}"
-            valuations = []
-            for val_index, valuation in enumerate(group_element.findall("valuation")):
-                val_name = valuation.get("name") or f"valuation-{val_index + 1}"
-                task_id = f"g{group_index + 1}-t{val_index + 1}-{val_name}"
-                valuations.append({
-                    "taskId": task_id,
-                    "valuationName": val_name,
-                    "element": deepcopy(valuation),
-                })
-            groups.append({"name": group_name, "valuations": valuations})
-        metadata = {
-            "markets": [deepcopy(node) for node in project_element.findall("market")],
-            "models": [deepcopy(node) for node in project_element.findall("model")],
-            "calculators": [deepcopy(node) for node in project_element.findall("calculator")],
-            "portfolio": deepcopy(project_element.find("portfolio")),
-        }
-        return {"metadata": metadata, "groups": groups}
 
     # --- Dispatch helpers -----------------------------------------------------------------
 
-    def _dispatch_group(self, request_id: str, group_index: int, group: Dict[str, object], project: Dict[str, object], prior_results: Dict[str, Dict[str, str]]) -> List[TaskDescriptor]:
-        valuations = group.get("valuations", [])
+    def _dispatch_group(self, request_id: str, group_index: int, group: etree._Element, root: etree._Element) -> List[TaskDescriptor]:
+        valuations = group.findall("valuation")
+        #print (f"Dispatching group {group_index} with {len(valuations)} valuations")
+
         expected = len(valuations)
         group_key = GROUP_STATE_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index)
         self.redis.hset(group_key, mapping={
@@ -137,11 +129,37 @@ class RequestOrchestrator:
             "status": "running",
         })
 
+        # create a template XML for task requests
+        group_task_req_template = self.copy_without_nodes(
+            root,
+            [
+                "/vnml/project/market",
+                "/vnml/project/model",
+                "/vnml/project/calculator",
+                "/vnml/project/portfolio",
+                "/vnml/project/group",
+            ],
+        )
+        # add current group only
+        group_task_req_template.find("project").append(copy.deepcopy(group))
+        # remove all existing valuation nodes
+        for node in group_task_req_template.xpath("/vnml/project/group/valuation", namespaces=None):
+            parent = node.getparent()
+            if parent is not None:
+                parent.remove(node)
+
+        valuation_index = 0
         descriptors: List[TaskDescriptor] = []
         for valuation in valuations:
-            task_id = valuation["taskId"]
-            valuation_name = valuation["valuationName"]
-            task_xml = self._compose_task_xml(project["metadata"], valuation["element"], prior_results)
+            # create a new task request XML from template
+            group_task_req = copy.deepcopy(group_task_req_template)
+            valuation_index += 1
+            task_id = str(valuation_index)
+            # create task_xml
+            hydrated = self.hydrator.hydrate(valuation, root)
+            # use group_task_req and add valuation node to group node
+            group_task_req.find("project").find("group").append(copy.deepcopy(hydrated))
+            task_xml = etree.tostring(group_task_req, pretty_print=True, encoding="unicode")
             xml_key = TASK_XML_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index, task_id=task_id)
             result_key = TASK_RESULT_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index, task_id=task_id)
             self.redis.set(xml_key, task_xml)
@@ -150,7 +168,6 @@ class RequestOrchestrator:
                 "groupIdx": str(group_index),
                 "groupName": group.get("name", f"group-{group_index}"),
                 "taskId": task_id,
-                "valuationName": valuation_name,
                 "payloadKey": xml_key,
                 "resultKey": result_key,
                 "attempt": "1",
@@ -161,50 +178,57 @@ class RequestOrchestrator:
                 group_index=group_index,
                 group_name=group.get("name", f"group-{group_index}"),
                 task_id=task_id,
-                valuation_name=valuation_name,
                 xml_key=xml_key,
                 result_key=result_key,
             ))
+
         return descriptors
 
-    def _compose_task_xml(self, metadata: Dict[str, Iterable[ET.Element]], valuation_element: ET.Element, prior_results: Dict[str, Dict[str, str]]) -> str:
-        task_root = ET.Element("taskRequest")
-        header = ET.SubElement(task_root, "context")
-        for market in metadata.get("markets", []):
-            header.append(deepcopy(market))
-        for model in metadata.get("models", []):
-            header.append(deepcopy(model))
-        for calculator in metadata.get("calculators", []):
-            header.append(deepcopy(calculator))
-        portfolio = metadata.get("portfolio")
-        if portfolio is not None:
-            header.append(deepcopy(portfolio))
-        if prior_results:
-            prior_container = ET.SubElement(task_root, "priorResults")
-            for task_id, result in prior_results.items():
-                result_node = ET.SubElement(prior_container, "result", attrib={"taskId": task_id})
-                result_node.text = json.dumps(result)
-        valuation_copy = deepcopy(valuation_element)
-        task_root.append(valuation_copy)
-        return ET.tostring(task_root, encoding="unicode")
+    def copy_without_nodes(self, tree: etree._ElementTree, xpaths, ns=None) -> etree._ElementTree:
+        """
+        Return a deep-copied ElementTree with all nodes matching any of the
+        provided XPath expressions removed.
 
+        Args:
+            tree   : lxml ElementTree parsed from your XML
+            xpaths : iterable of XPath strings (e.g., ["//debug", "//price/amount"])
+            ns     : optional namespace map, e.g. {"v": "http://example.com/v1"}
+        """
+        root_copy = copy.deepcopy(tree)
+        # Remove matches from the copy
+        for xp in xpaths:
+            for node in root_copy.xpath(xp, namespaces=ns):
+                # Only element/comment/PI nodes have parents you can remove from
+                parent = node.getparent()
+                if parent is not None:
+                    parent.remove(node)
+                else:
+                    # If the XPath hit the root, you can replace it or clear it
+                    node.clear()  # minimal fallback
+        return root_copy
+    
     # --- Completion handling ---------------------------------------------------------------
 
-    def _await_group_completion(self, request_id: str, group_index: int, descriptors: List[TaskDescriptor]) -> List[Dict[str, str]]:
+    def _await_group_completion(self, request_id: str, group_index: int, descriptors: List[TaskDescriptor], group: etree._Element) -> None:
         expected = len(descriptors)
         consumer_group = self._consumer_group_name(request_id)
         consumer = f"orchestrator-{int(time.time() * 1000) % 10000}"
         deadline = time.time() + (TASK_WAIT_TIMEOUT_MS / 1000)
-        completed: List[Dict[str, str]] = []
+        completed = 0
         pending_failures: List[Dict[str, str]] = []
 
         descriptor_by_task = {desc.task_id: desc for desc in descriptors}
 
-        while len(completed) < expected:
+        # remove all valuation nodes from group (they will be re-added as results come in)
+        for node in group.xpath("./valuation"):
+            parent = node.getparent()
+            parent.remove(node)
+
+        while completed < expected:
             if time.time() > deadline:
                 raise TimeoutError(f"Timed out waiting for group {group_index} completion")
 
-            entries = self.redis.xreadgroup(
+            entries = self.redis_task_update_stream.xreadgroup(
                 groupname=consumer_group,
                 consumername=consumer,
                 streams={TASK_UPDATES_STREAM: '>'},
@@ -215,9 +239,11 @@ class RequestOrchestrator:
                 continue
 
             for stream_name, messages in entries:
+                #print(f"Received {len(messages)} messages from stream {stream_name}")
                 if stream_name != TASK_UPDATES_STREAM:
                     continue
                 for message_id, raw_values in messages:
+                    #print(f"Processing message {message_id} with values {raw_values}")
                     if isinstance(raw_values, dict):
                         values = raw_values
                     else:
@@ -244,15 +270,16 @@ class RequestOrchestrator:
                         continue
 
                     if status == "completed":
-                        result_payload = self._extract_result_payload(values)
-                        completed.append({
-                            "taskId": task_id,
-                            "resultKey": descriptor.result_key,
-                            "result": result_payload,
-                        })
+                        completed += 1
+                        xml_payload = self._extract_result_payload(values)
+                        # append valuation result to group
+                        task_result_root = etree.fromstring(xml_payload.encode("UTF-8"))
+                        valudation_result = task_result_root.find("project/group/valuation")
+                        group.append(copy.deepcopy(valudation_result))
+
                         self.redis.hset(
                             GROUP_STATE_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index),
-                            mapping={"completed": len(completed)}
+                            mapping={"completed": completed}
                         )
                     elif status == "failed":
                         attempt_value = int(values.get("attempt", values.get("attempts", "1")))
@@ -277,26 +304,11 @@ class RequestOrchestrator:
             GROUP_STATE_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index),
             mapping={"status": "completed"}
         )
-        return completed
 
-    def _extract_result_payload(self, values: Dict[str, str]) -> Dict[str, str]:
+    def _extract_result_payload(self, values: Dict[str, str]) -> str:
         result_key = values.get("resultKey")
-        payload = {
-            "status": values.get("status"),
-            "resultKey": result_key,
-        }
-        if "result" in values:
-            try:
-                payload.update(json.loads(values["result"]))
-            except json.JSONDecodeError:
-                payload["raw"] = values["result"]
-        stored_result = self.redis.get(result_key) if result_key else None
-        if stored_result:
-            try:
-                payload["stored"] = json.loads(stored_result)
-            except json.JSONDecodeError:
-                payload["stored"] = stored_result
-        return payload
+        result_payload = self.redis.get(result_key) if result_key else None
+        return result_payload
 
     def _invoke_task_processor(self, payload: Dict[str, str]) -> None:
         if not self.task_invoker:
@@ -381,3 +393,20 @@ class RequestOrchestrator:
 
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def lambda_handler(event: Dict[str, str], context: object):
+    try:
+        import boto3
+        function_name = os.environ.get("VN_VNAS_SERBIVE", "glv-vnas-service")
+        lambda_client = boto3.client("lambda")
+        task_invoker = TaskInvoker(
+            lambda_client=lambda_client,
+            function_name=function_name,
+        )
+        xmlHydrator = XmlHydrator()
+        orchestrator = RequestOrchestrator(hydrator=xmlHydrator, task_invoker=task_invoker)
+        return orchestrator.run(event)
+    except Exception as exc:
+        LOGGER.exception("Orchestration failed", extra={"event": event, "error": str(exc)})
+        raise

@@ -12,11 +12,12 @@ import {
 } from './utils.js';
 
 export class MainOrchestrator {
-  constructor({ redis, stateRepository, lifecyclePublisher, requestInvoker, logger }) {
+  constructor({ redis, redisRequestStream, stateRepository, lifecyclePublisher, requestInvoker, logger }) {
     if (!redis) {
       throw new Error('redis client is required');
     }
     this.redis = redis;
+    this.redisRequestStream = redisRequestStream;
     this.stateRepository = stateRepository;
     this.lifecyclePublisher = lifecyclePublisher;
     this.requestInvoker = requestInvoker;
@@ -47,7 +48,7 @@ export class MainOrchestrator {
     await this.ensureConsumerGroup();
     this.stopped = false;
     while (!this.stopped) {
-      const response = await xreadgroupStream(this.redis, {
+      const response = await xreadgroupStream(this.redisRequestStream, {
         stream: REQUEST_STREAM,
         group: REQUEST_CONSUMER_GROUP,
         consumer: REQUEST_CONSUMER_NAME,

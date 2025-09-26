@@ -79,6 +79,7 @@ export class RequestSubmissionService {
     if (this.queryService) {
       const existing = await this.queryService.getResult(requestId);
       if (existing) {
+        console.log(`Synchronous request ${requestId} already has response, returning immediately`);
         return { status: 'completed', responseXml: existing };
       }
       const status = await this.queryService.getStatus(requestId);
@@ -116,12 +117,17 @@ export class RequestSubmissionService {
             return { status: 'failed' };
           }
           const responseXml = await this.redis.get(responseKey);
+          // console.log(`Synchronous request ${requestId} finished with status ${status}, responseKey=${responseKey}, responseXml length=${responseXml?.length}`);
           return { status: 'completed', responseXml: responseXml || '' };
         }
       }
     }
 
     return { status: 'pending' };
+  }
+
+  async _sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   async _resolveInitialLifecycleId() {

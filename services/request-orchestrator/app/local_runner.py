@@ -18,6 +18,7 @@ from redis import Redis
 
 from app.orchestrator import RequestOrchestrator
 from app.task_invoker import TaskInvoker
+from app.hydrator import XmlHydrator
 
 TASK_PROCESSOR_PACKAGE_ROOT = os.path.abspath(os.path.join(PACKAGE_ROOT, '..', 'task-processor'))
 
@@ -74,7 +75,8 @@ def main() -> int:
         if xml_key and not redis_client.exists(xml_key):
             raise ValueError(f"XML payload {xml_key} is missing before invocation")
         task_invoker = _LocalTaskInvoker(redis_client, logger)
-        orchestrator = RequestOrchestrator(redis_client, logger=logger, task_invoker=task_invoker)
+        xmlHydrator = XmlHydrator()
+        orchestrator = RequestOrchestrator(hydrator=xmlHydrator, task_invoker=task_invoker, logger=logger)
         orchestrator.run(event)
     finally:
         try:
@@ -94,6 +96,7 @@ class _LocalTaskInvoker(TaskInvoker):
         self._processor = TaskProcessor(redis_client, logger=logger)
 
     def invoke_async(self, payload: dict) -> None:  # type: ignore[override]
+        #print(f"Invoking task processor for task {payload.get('taskId')}")
         self._processor.handle_dispatch({"values": payload})
 
 

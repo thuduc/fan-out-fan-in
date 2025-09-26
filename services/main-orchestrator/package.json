@@ -12,7 +12,9 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
+    "@aws-sdk/client-lambda": "^3.893.0",
     "express": "^5.1.0",
-    "ioredis": "^5.7.0"
+    "ioredis": "^5.7.0",
+    "xml-formatter": "^3.6.7"
   }
 }

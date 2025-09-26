@@ -11,18 +11,19 @@ async function bootstrap() {
   const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
   const redis = new Redis(redisUrl, { lazyConnect: false });
   redis.on('error', (error) => logger.error('Redis connection error', { error }));
+  // request stream needs its own redis connection to avoid HOL blocking
+  const redisRequestStream = redis.duplicate(); 
 
   const stateRepository = new RequestStateRepository(redis);
   const lifecyclePublisher = new LifecyclePublisher(redis);
   const requestInvoker = new LambdaInvoker({
-    client: { send: async () => {} },
-    functionName: process.env.REQUEST_ORCHESTRATOR_ARN || 'request-orchestrator-stub',
-    commandFactory: (payload) => payload,
+    functionName: process.env.REQUEST_ORCHESTRATOR_ARN || 'glv-vnvs-request-orchestrator',
     logger,
   });
 
   const orchestrator = new MainOrchestrator({
     redis,
+    redisRequestStream,
     stateRepository,
     lifecyclePublisher,
     requestInvoker,
@@ -43,6 +44,7 @@ async function bootstrap() {
     orchestrator.stop();
     try {
       await redis.quit();
+      await redisRequestStream.quit();
     } catch (error) {
       logger.warn?.('Error quitting redis', { error });
     }

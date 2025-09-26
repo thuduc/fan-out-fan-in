@@ -5,5 +5,5 @@ GROUP_STATE_KEY_TEMPLATE = "state:request:{request_id}:group:{group_index}"
 TASK_XML_KEY_TEMPLATE = "cache:task:{request_id}:{group_index}:{task_id}:xml"
 TASK_RESULT_KEY_TEMPLATE = "cache:task:{request_id}:{group_index}:{task_id}:result"
 DEFAULT_BLOCK_MS = 5000
-TASK_WAIT_TIMEOUT_MS = 60000
+TASK_WAIT_TIMEOUT_MS = 10000
 MAX_TASK_RETRIES = 3

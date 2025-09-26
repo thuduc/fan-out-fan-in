@@ -3,6 +3,7 @@ import logging
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Dict, Optional
+from lxml import etree
 
 from .constants import TASK_UPDATES_STREAM
 
@@ -33,17 +34,17 @@ class TaskProcessor:
             if payload_xml is None:
                 raise FileNotFoundError(f"Missing task payload {context.payload_key}")
             result = self._execute_task(payload_xml)
-            self.redis.set(context.result_key, json.dumps(result))
-            self._publish_update(context, "completed", result)
-            return {"status": "completed", "taskId": context.task_id, "result": result}
+            self.redis.set(context.result_key, result)
+            self._publish_update(context, "completed")
+            return {"status": "completed", "taskId": context.task_id}
         except Exception as exc:  # noqa: BLE001
             self.logger.exception("Task processing failed", extra={"taskId": context.task_id})
             failure = {"error": str(exc)}
-            self._publish_update(context, "failed", failure)
+            self._publish_update(context, "failed", str(exc))
             self._record_failure(context, failure)
             raise
 
-    def _publish_update(self, context: TaskContext, status: str, payload: Dict[str, object]) -> None:
+    def _publish_update(self, context: TaskContext, status: str, stacktrace: str='') -> None:
         event = {
             "requestId": context.request_id,
             "groupIdx": str(context.group_index),
@@ -53,7 +54,7 @@ class TaskProcessor:
             "resultKey": context.result_key,
             "status": status,
             "attempt": str(context.attempt),
-            "result": json.dumps(payload),
+            "result": stacktrace,
         }
         self.redis.xadd(TASK_UPDATES_STREAM, event)
 
@@ -88,6 +89,16 @@ class TaskProcessor:
         )
 
     def _execute_task(self, xml_payload: str) -> Dict[str, object]:
+        """Evaluate the valuation XML and return the evaluated XML string."""
+        # raise NotImplementedError("TaskService.evaluate must be implemented by the integrator.")
+        #print(f"Executing task with payload: {xml_payload}")
+        valuation_element = etree.fromstring(xml_payload.encode("UTF-8"))
+        amount_nodes = valuation_element.xpath(".//analytics/price/amount")
+        if amount_nodes:
+            amount_nodes[0].text = "100.00"
+        return etree.tostring(valuation_element, encoding="UTF-8").decode("UTF-8")
+
+    def _execute_task_old(self, xml_payload: str) -> Dict[str, object]:
         root = ET.fromstring(xml_payload)
         valuation = root.find("valuation")
         if valuation is None:

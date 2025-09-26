@@ -1,22 +1,20 @@
+import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { INVOCATION_TIMEOUT_MS } from './constants.js';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 
 /**
  * Thin wrapper around an AWS Lambda client to allow dependency injection in tests.
  */
 export class LambdaInvoker {
-  constructor({ client, functionName, commandFactory, logger }) {
-    if (!client) {
-      throw new Error('client is required');
-    }
+  constructor({ functionName, logger }) {
     if (!functionName) {
       throw new Error('functionName is required');
     }
-    if (typeof commandFactory !== 'function') {
-      throw new Error('commandFactory must be provided');
-    }
-    this.client = client;
+
+    const region = process.env.AWS_REGION || "us-east-1";
+
+    this.client = new LambdaClient({ region });
     this.functionName = functionName;
-    this.commandFactory = commandFactory;
     this.logger = logger || console;
   }
 
@@ -36,9 +34,8 @@ export class LambdaInvoker {
   }
 
   _buildInvokeCommand(payload) {
-    return this.commandFactory({
+    return new InvokeCommand({
       FunctionName: this.functionName,
-      InvocationType: 'Event',
       Payload: Buffer.from(JSON.stringify(payload))
     });
   }

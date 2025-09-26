@@ -24,7 +24,7 @@ class RequestOrchestratorIntegrationTests(unittest.TestCase):
         self.redis.flushdb()
         processor = TaskProcessor(self.redis)
         self.invoker = _InlineTaskInvoker(processor)
-        self.orchestrator = RequestOrchestrator(self.redis, task_invoker=self.invoker)
+        self.orchestrator = RequestOrchestrator(task_invoker=self.invoker)
 
     def tearDown(self):
         try:

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<req>
+<vnml>
     <project>
         <market name="Market1"/>
         <model name="Model1"/>
@@ -42,20 +42,6 @@
                 </analytics>
                 <instrument ref-name="Instrument2"/>
             </valuation>
-            <valuation name="analytics">
-                <market ref-name="Market1"/>
-                <model ref-name="Model1"/>
-                <calculator ref-name="Calculator1"/>
-                <analytics>
-                    <evaluation>
-                        <date>2025-09-17</date>
-                    </evaluation>
-                    <price>
-                        <amount>1.25</amount>
-                    </price>
-                </analytics>
-                <instrument ref-name="Instrument2"/>
-            </valuation>
         </group>
     </project>
-</req>
+</vnml>
