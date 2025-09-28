@@ -1,8 +1,11 @@
-<?xml version="1.0" encoding="UTF-8" ?>
+<?xml version="1.0" encoding="UTF-8"?>
+<?vnvs?>
 <vnml>
     <project>
         <market name="Market1"/>
+        <market name="Market2"/>
         <model name="Model1"/>
+        <model name="Model2"/>
         <portfolio>
             <instrument name="Instrument1"/>
             <instrument name="Instrument2"/>
@@ -10,9 +13,9 @@
         <calculator name="Calculator1"/>
         <group name="Group1">
             <valuation name="security">
-                <market ref-name="Market1"/>
-                <model ref-name="Model1"/>
-                <calculator ref-name="Calculator1"/>
+                <market select="/vnml/project/market[1]"/>
+                <model select="/vnml/project/model[1]"/>
+                <calculator select="/vnml/project/calculator"/>
                 <analytics>
                     <evaluation>
                         <date>2025-09-17</date>
@@ -24,14 +27,14 @@
                         <amount>1.25</amount>
                     </accruedInterest>
                 </analytics>
-                <instrument ref-name="Instrument1"/>
+                <instrument select="/vnml/project/portfolio/instrument[1]"/>
             </valuation>
         </group>
         <group name="Group2">
             <valuation name="schedule">
-                <market ref-name="Market1"/>
-                <model ref-name="Model1"/>
-                <calculator ref-name="Calculator1"/>
+                <market select="/vnml/project/market[2]"/>
+                <model select="/vnml/project/model[2]"/>
+                <calculator select="/vnml/project/calculator"/>
                 <analytics>
                     <evaluation>
                         <date>2025-09-17</date>
@@ -40,7 +43,7 @@
                         <amount>1.25</amount>
                     </price>
                 </analytics>
-                <instrument ref-name="Instrument2"/>
+                <instrument select="/vnml/project/portfolio/instrument[1]"/>
             </valuation>
         </group>
     </project>
