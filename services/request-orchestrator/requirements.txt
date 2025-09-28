@@ -1,3 +1,3 @@
 redis>=5.0.0
 lxml
-boto3
+boto3==1.40.40

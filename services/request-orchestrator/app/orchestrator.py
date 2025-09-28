@@ -13,7 +13,13 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
 
 from .task_invoker import TaskInvoker
-from .hydrator import XmlHydrator
+from .hydration import (
+    HydrationEngine,
+    HrefHydrationStrategy,
+    SelectHydrationStrategy,
+    UseFunctionHydrationStrategy,
+)
+from .hydration.fetchers import S3ResourceFetcher
 
 from .constants import (
     GROUP_STATE_KEY_TEMPLATE,
@@ -50,11 +56,23 @@ class TaskDescriptor:
 class RequestOrchestrator:
     def __init__(
         self,
-        hydrator: XmlHydrator,
+        hydration_engine: Optional[HydrationEngine] = None,
         task_invoker: Optional[object] = None,
         logger: Optional[logging.Logger] = None,
     ):
-        self.hydrator = hydrator
+        if hydration_engine is None:
+            fetcher = S3ResourceFetcher()
+            href_strategy = HrefHydrationStrategy(fetcher)
+            engine = HydrationEngine(
+                strategies=[
+                    href_strategy,
+                    UseFunctionHydrationStrategy(),
+                    SelectHydrationStrategy(),
+                    href_strategy,
+                ]
+            )
+            hydration_engine = engine
+        self._hydration_engine = hydration_engine
         self.logger = logger or LOGGER
         self.task_invoker = task_invoker
         self.redis = create_redis()
@@ -73,7 +91,11 @@ class RequestOrchestrator:
             root = etree.fromstring(raw_xml.encode("UTF-8"))
         except etree.XMLSyntaxError as exc:
             raise ValueError("Input XML is not well-formed.") from exc
-        
+
+        hydrated_items = self._hydration_engine.hydrate_element(root, root)
+        if hydrated_items:
+            root = hydrated_items[0].element
+
         project = root.find("project")
         groups = project.findall("group") if project is not None else []
         group_count = project.xpath("count(./group)")
@@ -117,8 +139,19 @@ class RequestOrchestrator:
     # --- Dispatch helpers -----------------------------------------------------------------
 
     def _dispatch_group(self, request_id: str, group_index: int, group: etree._Element, root: etree._Element) -> List[TaskDescriptor]:
-        valuations = group.findall("valuation")
-        #print (f"Dispatching group {group_index} with {len(valuations)} valuations")
+        hydrated_groups = self._hydration_engine.hydrate_element(group, root)
+        if hydrated_groups:
+            group = hydrated_groups[0].element
+
+        # valuations = group.findall("valuation")
+        #print (f"Dispatching hydrated_groups {group_index} with {len(valuations)} valuations")
+
+        # hydrate each valuation in group, since each could result in multiple valuations
+        valuations = []
+        for val in group.findall("valuation"):
+            hydrated_valuations = self._hydration_engine.hydrate_element(val, root)
+            if hydrated_valuations:
+                valuations.extend(item.element for item in hydrated_valuations)
 
         expected = len(valuations)
         group_key = GROUP_STATE_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index)
@@ -155,10 +188,8 @@ class RequestOrchestrator:
             group_task_req = copy.deepcopy(group_task_req_template)
             valuation_index += 1
             task_id = str(valuation_index)
-            # create task_xml
-            hydrated = self.hydrator.hydrate(valuation, root)
-            # use group_task_req and add valuation node to group node
-            group_task_req.find("project").find("group").append(copy.deepcopy(hydrated))
+            # create task_xml by using group_task_req to append valuation node to ./project/group
+            group_task_req.find("project").find("group").append(copy.deepcopy(valuation))
             task_xml = etree.tostring(group_task_req, pretty_print=True, encoding="unicode")
             xml_key = TASK_XML_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index, task_id=task_id)
             result_key = TASK_RESULT_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index, task_id=task_id)
@@ -404,8 +435,7 @@ def lambda_handler(event: Dict[str, str], context: object):
             lambda_client=lambda_client,
             function_name=function_name,
         )
-        xmlHydrator = XmlHydrator()
-        orchestrator = RequestOrchestrator(hydrator=xmlHydrator, task_invoker=task_invoker)
+        orchestrator = RequestOrchestrator(task_invoker=task_invoker)
         return orchestrator.run(event)
     except Exception as exc:
         LOGGER.exception("Orchestration failed", extra={"event": event, "error": str(exc)})

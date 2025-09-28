@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?vnvs?>
+<vnml>
+    <project>
+        <market name="Market1" href="s3://duc-default-bucket/vn/standard/market.xml" attr1="value1">
+            <rate>0.0513</rate>
+            <nested>
+                <key>value</key>
+            </nested>
+        </market>
+        <market name="Market2"/>
+        <model name="Model1" href="s3://duc-default-bucket/vn/standard/model.xml">
+            <process>extended</process>
+        </model>
+        <model name="Model2"/>
+        <portfolio>
+            <instrument name="Instrument1"/>
+            <instrument name="Instrument2"/>
+            <instrument name="Instrument3"/>
+        </portfolio>
+        <calculator name="Calculator1"/>
+        <group name="Group1">
+            <valuation name="security">
+                <market select="/vnml/project/market[1]"/>
+                <model select="/vnml/project/model[1]"/>
+                <calculator select="/vnml/project/calculator"/>
+                <analytics>
+                    <evaluation>
+                        <date>2025-09-17</date>
+                    </evaluation>
+                    <price>
+                        <amount>1.25</amount>
+                    </price>
+                    <accruedInterest>
+                        <amount>1.25</amount>
+                    </accruedInterest>
+                </analytics>
+                <instrument select="/vnml/project/portfolio/instrument[1]"/>
+            </valuation>
+        </group>
+        <group name="Group2">
+            <valuation name="schedule" use="vn:link(/vnml/project/portfolio, instrument)">
+                <market select="/vnml/project/market[1]"/>
+                <model select="/vnml/project/model[1]"/>
+                <calculator select="/vnml/project/calculator"/>
+                <analytics>
+                    <evaluation>
+                        <date>2025-09-17</date>
+                    </evaluation>
+                    <price>
+                        <amount>1.25</amount>
+                    </price>
+                </analytics>
+                <instrument select="."/>
+            </valuation>
+        </group>
+        <group name="Group3">
+            <valuation name="future" use="vn:link(/vnml/project/group[2], valuation)">
+                <market select="/vnml/project/market[2]"/>
+                <model select="/vnml/project/model[2]"/>
+                <calculator select="/vnml/project/calculator"/>
+                <analytics>
+                    <evaluation>
+                        <date>2025-10-17</date>
+                    </evaluation>
+                    <previousPrice>
+                        <amount select="./analytics/price/amount"/>
+                    </previousPrice>
+                    <price>
+                        <amount>1.25</amount>
+                    </price>
+                </analytics>
+                <instrument select="./instrument"/>
+            </valuation>
+        </group>
+    </project>
+</vnml>

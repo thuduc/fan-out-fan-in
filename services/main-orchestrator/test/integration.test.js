@@ -23,6 +23,7 @@ const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const REQUEST_PYTHON = resolvePythonExecutable('request-orchestrator');
 const REQUEST_RUNNER = path.join(repoRoot, 'services/request-orchestrator/app/local_runner.py');
 const REQUEST_XML_PATH = path.join(repoRoot, 'request.xml');
+const REQUEST3_XML_PATH = path.join(repoRoot, 'request3.xml');
 
 const REDIS_URL = resolveTestRedisUrl();
 
@@ -53,7 +54,7 @@ class LocalRequestInvoker {
 }
 
 test('integration: async submission resolves downstream state', { concurrency: false }, async (t) => {
-  const harness = await createHarness(t);
+  const harness = await createHarness(REQUEST_XML_PATH, t);
   const { submissionService, queryService, xml } = harness;
 
   const submission = await submissionService.submit({ xml, sync: false });
@@ -74,7 +75,7 @@ test('integration: async submission resolves downstream state', { concurrency: f
 
 
 test('integration: sync submission returns composed response', { concurrency: false }, async (t) => {
-  const harness = await createHarness(t);
+  const harness = await createHarness(REQUEST_XML_PATH, t);
   const { submissionService, queryService, xml } = harness;
 
   const result = await submissionService.submit({ xml, sync: true });
@@ -85,8 +86,21 @@ test('integration: sync submission returns composed response', { concurrency: fa
   assert.equal(status.status, 'succeeded');
 });
 
-async function createHarness(t) {
-  const xml = await readFile(REQUEST_XML_PATH, 'utf8');
+
+test('integration: sync submission returns composed response', { concurrency: false }, async (t) => {
+  const harness = await createHarness(REQUEST3_XML_PATH, t);
+  const { submissionService, queryService, xml } = harness;
+
+  const result = await submissionService.submit({ xml, sync: true });
+  assert.equal(result.status, 'completed');
+  // console.log('responseXml: ', format(result['responseXml']))
+  assert.ok(result.responseXml);
+  const status = await queryService.getStatus(result.requestId);
+  assert.equal(status.status, 'succeeded');
+});
+
+async function createHarness(request_xml_path, t) {
+  const xml = await readFile(request_xml_path, 'utf8');
 
   console.log('Using REDIS_URL:', REDIS_URL);
 

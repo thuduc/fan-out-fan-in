@@ -7,7 +7,7 @@ from redis import Redis
 
 os.environ.setdefault('REDIS_URL', 'redis://127.0.0.1:6379/14')
 
-from app.hydrator import XmlHydrator
+# from app.hydrator import XmlHydrator
 from app.orchestrator import RequestOrchestrator
 from app.constants import (
     REQUEST_LIFECYCLE_STREAM,
@@ -43,7 +43,7 @@ class RequestOrchestratorIntegrationTests(unittest.TestCase):
         self.redis.flushdb()
         processor = TaskProcessor(self.redis)
         self.invoker = _InlineTaskInvoker(processor)
-        self.orchestrator = RequestOrchestrator(hydrator=XmlHydrator(), task_invoker=self.invoker)
+        self.orchestrator = RequestOrchestrator(task_invoker=self.invoker)
 
     def tearDown(self):
         try:
@@ -92,7 +92,7 @@ class RequestOrchestratorIntegrationTests(unittest.TestCase):
         self.redis.set(xml_key, xml)
 
         with self.assertRaises(RuntimeError):
-            RequestOrchestrator(hydrator=XmlHydrator(), task_invoker=_FailingInvoker()).run({
+            RequestOrchestrator(task_invoker=_FailingInvoker()).run({
                 "requestId": request_id,
                 "xmlKey": xml_key,
             })
