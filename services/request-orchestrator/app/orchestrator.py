@@ -116,6 +116,16 @@ class RequestOrchestrator:
             })
             raise
 
+        root = self.remove_child_nodes(
+            root,
+            [
+                "/vnml/project/market",
+                "/vnml/project/model",
+                "/vnml/project/calculator",
+                "/vnml/project/portfolio",
+            ],
+        )
+
         response_xml = etree.tostring(root, pretty_print=True, encoding="unicode")
         self.redis.set(response_key, response_xml)
         self._mark_request_state(
@@ -210,6 +220,28 @@ class RequestOrchestrator:
             ))
 
         return descriptors
+
+    def remove_child_nodes(self, tree: etree._ElementTree, xpaths, ns=None) -> etree._ElementTree:
+        """
+        Return ElementTree with all nodes matching any of the
+        provided XPath expressions removed.
+
+        Args:
+            tree   : lxml ElementTree parsed from your XML
+            xpaths : iterable of XPath strings (e.g., ["//debug", "//price/amount"])
+            ns     : optional namespace map, e.g. {"v": "http://example.com/v1"}
+        """
+        # Remove matches from the copy
+        for xp in xpaths:
+            for node in tree.xpath(xp, namespaces=ns):
+                # Only element/comment/PI nodes have parents you can remove from
+                parent = node.getparent()
+                if parent is not None:
+                    parent.remove(node)
+                else:
+                    # If the XPath hit the root, you can replace it or clear it
+                    node.clear()  # minimal fallback
+        return tree
 
     def copy_without_nodes(self, tree: etree._ElementTree, xpaths, ns=None) -> etree._ElementTree:
         """
