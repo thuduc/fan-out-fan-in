@@ -5,7 +5,7 @@ from typing import Dict
 
 from lxml import etree
 
-from .exceptions import HydrationError
+from exceptions import HydrationError
 
 
 class XmlHydrator:

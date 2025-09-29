@@ -8,7 +8,7 @@ from typing import Dict, Optional
 
 from lxml import etree
 
-from .constants import TASK_UPDATES_STREAM
+from constants import TASK_UPDATES_STREAM
 
 LOGGER = logging.getLogger(__name__)
 

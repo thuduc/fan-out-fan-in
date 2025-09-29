@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable, List
 
-from .base import ResourceFetcher, ResourceFetchError
+from hydration.fetchers.base import ResourceFetcher, ResourceFetchError
 
 
 class CompositeResourceFetcher(ResourceFetcher):

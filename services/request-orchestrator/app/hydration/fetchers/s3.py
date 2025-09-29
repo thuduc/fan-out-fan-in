@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from .base import ResourceFetcher, ResourceFetchError
+from hydration.fetchers.base import ResourceFetcher, ResourceFetchError
 
 try:  # pragma: no cover - optional dependency
     import boto3

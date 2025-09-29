@@ -6,7 +6,7 @@ from typing import Iterable, List, Optional, Sequence
 
 from lxml import etree
 
-from ..exceptions import HydrationError
+from exceptions import HydrationError
 
 
 @dataclass

@@ -6,15 +6,12 @@ from typing import Deque, Dict, List, Optional, Sequence, Tuple
 
 from lxml import etree
 
-from ..exceptions import HydrationError
-from .engine import HydrationItem, HydrationStrategy, HydrationEngine
-from .fetchers import (
-    CompositeResourceFetcher,
-    FileResourceFetcher,
-    ResourceFetchError,
-    ResourceFetcher,
-    S3ResourceFetcher,
-)
+from exceptions import HydrationError
+from hydration.engine import HydrationItem, HydrationStrategy, HydrationEngine
+from hydration.fetchers.base import ResourceFetcher, ResourceFetchError
+from hydration.fetchers.composite import CompositeResourceFetcher
+from hydration.fetchers.file import FileResourceFetcher
+from hydration.fetchers.s3 import S3ResourceFetcher
 
 
 class HrefHydrationStrategy(HydrationStrategy):

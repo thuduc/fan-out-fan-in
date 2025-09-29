@@ -12,14 +12,10 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
 
-from .task_invoker import TaskInvoker
-from .hydration import (
-    HydrationEngine,
-    HrefHydrationStrategy,
-    SelectHydrationStrategy,
-    UseFunctionHydrationStrategy,
-)
-from .hydration.fetchers import S3ResourceFetcher
+from task_invoker import TaskInvoker
+from hydration.engine import HydrationEngine, HydrationStrategy
+from hydration.strategies import HrefHydrationStrategy, SelectHydrationStrategy, UseFunctionHydrationStrategy
+from hydration.fetchers.s3 import S3ResourceFetcher
 
 from .constants import (
     GROUP_STATE_KEY_TEMPLATE,

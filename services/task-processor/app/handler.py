@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 from redis import Redis
 
-from .processor import TaskProcessor
+from processor import TaskProcessor
 
 LOGGER = logging.getLogger(__name__)
 _CLIENT = None
