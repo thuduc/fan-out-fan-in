@@ -97,7 +97,9 @@ class TaskProcessor:
         """Evaluate the valuation XML and return the evaluated XML string."""
         # raise NotImplementedError("TaskService.evaluate must be implemented by the integrator.")
         #print(f"Executing task with payload: {xml_payload}")
-        valuation_element = etree.fromstring(xml_payload.encode("UTF-8"))
+        if isinstance(xml_payload, str):
+            xml_payload = xml_payload.encode("utf-8")
+        valuation_element = etree.fromstring(xml_payload)
         amount_nodes = valuation_element.xpath(".//analytics/price/amount")
         if amount_nodes:
             amount_nodes[0].text = self._generate_amount()
