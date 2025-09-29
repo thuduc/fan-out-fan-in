@@ -428,7 +428,7 @@ def lambda_handler(event: Dict[str, str], context: object):
         function_name = os.environ.get("VN_VNAS_SERBIVE", "glv-vnas-service")
         lambda_client = boto3.client("lambda")
         task_invoker = TaskInvoker(
-            lambda_client=lambda_client,
+            client=lambda_client,
             function_name=function_name,
         )
         orchestrator = RequestOrchestrator(task_invoker=task_invoker)
