@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections import deque
-from typing import Deque, Dict, List, Optional, Sequence, Tuple
+from typing import Deque, Dict, List, Optional, Sequence, Tuple, Set
 
 from lxml import etree
 
@@ -292,7 +292,9 @@ class SelectHydrationStrategy(HydrationStrategy):
         processed: List[HydrationItem] = []
         for item in items:
             element = item.element
-            nodes_with_select = element.xpath(".//*[@select]")
+            nodes_with_select = list(element.xpath(".//*[@select]"))
+            if element.get("select"):
+                nodes_with_select.insert(0, element)
             for node in nodes_with_select:
                 if any(ancestor.get("use") for ancestor in node.iterancestors()):
                     continue
@@ -301,15 +303,14 @@ class SelectHydrationStrategy(HydrationStrategy):
                     raise HydrationError("Encountered select attribute without a value during hydration.")
                 replacement_source = self._resolve_reference(select_expr, document_root, item.context_node)
                 replacement_copy = copy.deepcopy(replacement_source)
+                self._merge_into_base(replacement_copy, node)
 
                 parent = node.getparent()
                 if parent is None:
-                    raise HydrationError(
-                        f"Cannot hydrate element <{node.tag}> without a parent; select expression '{select_expr}' is invalid."
-                    )
+                    item.element = replacement_copy
+                    continue
 
                 insertion_index = parent.index(node)
-                node.attrib.pop("select", None)
                 parent.insert(insertion_index, replacement_copy)
                 parent.remove(node)
 
@@ -352,3 +353,58 @@ class SelectHydrationStrategy(HydrationStrategy):
                 f"Select expression '{select_expr}' resolved to {len(elements)} elements; expected exactly one."
             )
         return elements[0]
+
+    def _merge_into_base(self, base: etree._Element, overlay: etree._Element) -> None:
+        base.attrib.pop('select', None)
+
+        for name, value in overlay.attrib.items():
+            if name == 'select':
+                continue
+            if value is None:
+                continue
+            value_str = str(value).strip()
+            if value_str:
+                base.attrib[name] = value_str
+
+        if overlay.text and overlay.text.strip():
+            base.text = overlay.text
+
+        used_children: Set[int] = set()
+        for overlay_child in overlay:
+            match = self._find_matching_child(base, overlay_child, used_children)
+            if match is None:
+                base.append(copy.deepcopy(overlay_child))
+            else:
+                self._merge_into_base(match, overlay_child)
+                used_children.add(id(match))
+
+        if overlay.tail and overlay.tail.strip():
+            base.tail = overlay.tail
+
+    def _find_matching_child(
+        self,
+        base: etree._Element,
+        overlay_child: etree._Element,
+        used_children: Set[int],
+    ) -> Optional[etree._Element]:
+        key = self._child_identity_key(overlay_child)
+        if key is not None:
+            for child in base:
+                if id(child) in used_children:
+                    continue
+                if self._child_identity_key(child) == key:
+                    return child
+
+        for child in base:
+            if id(child) in used_children:
+                continue
+            if child.tag == overlay_child.tag:
+                return child
+        return None
+
+    def _child_identity_key(self, element: etree._Element) -> Optional[Tuple[str, str]]:
+        for attr in ('id', 'name', 'ref-name'):
+            value = element.get(attr)
+            if value:
+                return (element.tag, value)
+        return None

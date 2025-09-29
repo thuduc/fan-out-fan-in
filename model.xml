@@ -1,0 +1,9 @@
+<vnml>
+    <project>
+        <model name="Modal-current" date="2024-08-30" time="20:16:43">
+            <type>Historical</type>
+            <process>normal</process>
+            <href>https://finance.yahoo.com/quote/ES=F/history?p=ES=F</href>
+        </model>
+    </project>
+</vnml>

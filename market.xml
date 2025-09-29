@@ -1,0 +1,11 @@
+<vnml>
+    <project>
+        <market name="Close-27.1.0" date="2024-08-30" time="20:16:43">
+            <source>Yahoo</source>
+            <type>Close</type>
+            <currency>USD</currency>
+            <rate>0.0412</rate>
+            <href>https://finance.yahoo.com/quote/ES=F/history?p=ES=F</href>
+        </market>
+    </project>
+</vnml>

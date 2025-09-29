@@ -21,8 +21,8 @@
         <calculator name="Calculator1"/>
         <group name="Group1">
             <valuation name="security">
-                <market select="/vnml/project/market[1]"/>
-                <model select="/vnml/project/model[1]"/>
+                <market name="market" select="/vnml/project/market[1]"/>
+                <model name="model" select="/vnml/project/model[1]"/>
                 <calculator select="/vnml/project/calculator"/>
                 <analytics>
                     <evaluation>
@@ -40,8 +40,12 @@
         </group>
         <group name="Group2">
             <valuation name="schedule" use="vn:link(/vnml/project/portfolio, instrument)">
-                <market select="/vnml/project/market[1]"/>
-                <model select="/vnml/project/model[1]"/>
+                <market name="market2" select="/vnml/project/market[1]">
+                    <currency>CAN</currency>
+                </market>
+                <model name="model2" select="/vnml/project/model[1]">
+                    <type>Stochastic</type>
+                </model>
                 <calculator select="/vnml/project/calculator"/>
                 <analytics>
                     <evaluation>
@@ -56,8 +60,8 @@
         </group>
         <group name="Group3">
             <valuation name="future" use="vn:link(/vnml/project/group[2], valuation)">
-                <market select="/vnml/project/market[2]"/>
-                <model select="/vnml/project/model[2]"/>
+                <market name="market3" select="/vnml/project/market[2]"/>
+                <model name="model3" select="/vnml/project/model[2]"/>
                 <calculator select="/vnml/project/calculator"/>
                 <analytics>
                     <evaluation>
