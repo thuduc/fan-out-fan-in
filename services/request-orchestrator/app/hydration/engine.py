@@ -35,6 +35,7 @@ class HydrationEngine:
     def __init__(self, strategies: Optional[Iterable[HydrationStrategy]] = None) -> None:
         if strategies is None:
             from .strategies import (
+                AttributeSelectHydrationStrategy,
                 HrefHydrationStrategy,
                 SelectHydrationStrategy,
                 UseFunctionHydrationStrategy,
@@ -44,6 +45,7 @@ class HydrationEngine:
             strategies = [
                 href_strategy,
                 UseFunctionHydrationStrategy(),
+                AttributeSelectHydrationStrategy,
                 SelectHydrationStrategy(),
                 href_strategy,
             ]

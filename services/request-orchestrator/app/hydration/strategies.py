@@ -277,6 +277,81 @@ class UseFunctionHydrationStrategy(HydrationStrategy):
         return produced
 
 
+class AttributeSelectHydrationStrategy(HydrationStrategy):
+    """Replaces attribute placeholders of the form ``${select(xpath)}``."""
+
+    _PREFIX = "${select("
+    _SUFFIX = ")}"
+
+    def apply(
+        self,
+        items: Sequence[HydrationItem],
+        document_root: etree._Element,
+        engine: HydrationEngine,
+    ) -> List[HydrationItem]:
+        for item in items:
+            self._hydrate_attributes(item, document_root)
+        return list(items)
+
+    def _hydrate_attributes(self, item: HydrationItem, document_root: etree._Element) -> None:
+        for element in item.element.iter():
+            for attr_name, attr_value in list(element.attrib.items()):
+                xpath_expr = self._extract_xpath(attr_value)
+                if not xpath_expr:
+                    continue
+                resolved_value = self._resolve_xpath(
+                    xpath_expr,
+                    document_root,
+                    context_node=item.context_node,
+                )
+                element.set(attr_name, resolved_value)
+
+    def _extract_xpath(self, value: str) -> Optional[str]:
+        if not value.startswith(self._PREFIX) or not value.endswith(self._SUFFIX):
+            return None
+        inner = value[len(self._PREFIX) : -len(self._SUFFIX)].strip()
+        if not inner:
+            raise HydrationError(
+                "Attribute select placeholder must include a non-empty XPath expression."
+            )
+        return inner
+
+    def _resolve_xpath(
+        self,
+        xpath_expr: str,
+        document_root: etree._Element,
+        *,
+        context_node: Optional[etree._Element],
+    ) -> str:
+        if xpath_expr.startswith("/"):
+            results = document_root.xpath(xpath_expr)
+        elif xpath_expr.startswith("."):
+            if context_node is None:
+                raise HydrationError(
+                    f"XPath '{xpath_expr}' requires a context node provided by a custom function."
+                )
+            results = context_node.xpath(xpath_expr)
+        else:
+            raise HydrationError(
+                f"Attribute select XPath '{xpath_expr}' must be absolute or relative."
+            )
+
+        if not results:
+            raise HydrationError(
+                f"Attribute select XPath '{xpath_expr}' did not resolve to any values."
+            )
+        if len(results) != 1:
+            raise HydrationError(
+                f"Attribute select XPath '{xpath_expr}' resolved to {len(results)} values; expected exactly one."
+            )
+
+        value = results[0]
+        if isinstance(value, etree._Element):
+            return etree.tostring(value, encoding="unicode")
+        if isinstance(value, bytes):
+            return value.decode("UTF-8")
+        return str(value)
+
 class SelectHydrationStrategy(HydrationStrategy):
     """Resolves ``select`` attributes by cloning referenced nodes."""
 

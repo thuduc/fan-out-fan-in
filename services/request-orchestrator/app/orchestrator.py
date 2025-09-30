@@ -333,7 +333,9 @@ class RequestOrchestrator:
                         xml_payload = self._extract_result_payload(values)
                         # append valuation result to group
                         task_result_root = etree.fromstring(xml_payload.encode("UTF-8"))
-                        valudation_result = task_result_root.find("job/task/results/vnml/project/group/valuation")
+                        # uncomment to use in production
+                        #valudation_result = task_result_root.find("job/task/results/vnml/project/group/valuation")
+                        valudation_result = task_result_root.find("project/group/valuation")
                         group.append(copy.deepcopy(valudation_result))
 
                         self.redis.hset(
