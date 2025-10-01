@@ -14,6 +14,80 @@ from hydration.fetchers.file import FileResourceFetcher
 from hydration.fetchers.s3 import S3ResourceFetcher
 
 
+def _child_key(element: etree._Element, position: int) -> Tuple[str, Optional[str], Optional[str], int]:
+    for attr in ("name", "id"):
+        if attr in element.attrib:
+            return (element.tag, attr, element.get(attr), 0)
+    return (element.tag, None, None, position)
+
+
+def _child_signature(element: etree._Element) -> Tuple[str, Optional[str], Optional[str]]:
+    for attr in ("name", "id"):
+        if attr in element.attrib:
+            return (element.tag, attr, element.get(attr))
+    return (element.tag, None, None)
+
+
+def _merge_elements(
+    local: etree._Element,
+    remote: etree._Element,
+    *,
+    ignore_local_attrs: Iterable[str] = (),
+    ignore_remote_attrs: Iterable[str] = (),
+) -> etree._Element:
+    """Merge two elements giving precedence to the local node."""
+
+    local_ignore = set(ignore_local_attrs)
+    remote_ignore = set(ignore_remote_attrs)
+
+    merged = etree.Element(remote.tag, nsmap=remote.nsmap)
+
+    for key, value in remote.attrib.items():
+        if key in remote_ignore:
+            continue
+        merged.set(key, value)
+
+    for key, value in local.attrib.items():
+        if key in local_ignore:
+            continue
+        merged.set(key, value)
+
+    merged.text = local.text if local.text and local.text.strip() else remote.text
+    merged.tail = local.tail
+
+    remote_children = list(remote)
+    remote_lookup = { _child_key(child, idx): child for idx, child in enumerate(remote_children) }
+    consumed_keys: set[Tuple[str, Optional[str], Optional[str], int]] = set()
+
+    merged_children: List[etree._Element] = []
+    for idx, local_child in enumerate(local):
+        key = _child_key(local_child, idx)
+        if key in remote_lookup:
+            merged_child = _merge_elements(
+                local_child,
+                remote_lookup[key],
+                ignore_local_attrs=local_ignore,
+                ignore_remote_attrs=remote_ignore,
+            )
+            consumed_keys.add(key)
+        else:
+            merged_child = copy.deepcopy(local_child)
+        merged_children.append(merged_child)
+
+    local_signatures = {_child_signature(child) for child in local}
+
+    for idx, remote_child in enumerate(remote_children):
+        key = _child_key(remote_child, idx)
+        if key in consumed_keys:
+            continue
+        if _child_signature(remote_child) in local_signatures:
+            continue
+        merged_children.append(copy.deepcopy(remote_child))
+
+    merged[:] = merged_children
+    return merged
+
+
 class HrefHydrationStrategy(HydrationStrategy):
     """Resolves nodes that declare an ``href`` attribute by merging external XML."""
 
@@ -59,8 +133,12 @@ class HrefHydrationStrategy(HydrationStrategy):
         xpath = node.getroottree().getpath(node)
         remote_root = self._get_remote_document(href_value)
         remote_node = self._locate_remote_node(node, remote_root, xpath, href_value)
-        merged = self._merge_nodes(node, remote_node)
-        merged.attrib.pop("href", None)
+        merged = _merge_elements(
+            node,
+            remote_node,
+            ignore_local_attrs={"href"},
+            ignore_remote_attrs={"href"},
+        )
 
         parent = node.getparent()
         merged.tail = node.tail
@@ -114,64 +192,6 @@ class HrefHydrationStrategy(HydrationStrategy):
         raise HydrationError(
             f"Remote document at '{href_value}' does not contain a single match for XPath '{xpath}'."
         )
-
-    def _merge_nodes(self, local: etree._Element, remote: etree._Element) -> etree._Element:
-        merged = etree.Element(remote.tag, nsmap=remote.nsmap)
-
-        # Attributes: start with remote, overlay local (excluding href).
-        for key, value in remote.attrib.items():
-            merged.set(key, value)
-
-        for key, value in local.attrib.items():
-            if key == "href":
-                continue
-            merged.set(key, value)
-
-        # Text precedence: use local text when non-empty.
-        merged.text = local.text if local.text and local.text.strip() else remote.text
-        merged.tail = local.tail
-
-        # Merge children with precedence to local content.
-        remote_children = list(remote)
-        remote_lookup = {
-            self._child_key(child, idx): child for idx, child in enumerate(remote_children)
-        }
-        consumed_keys = set()
-
-        merged_children: List[etree._Element] = []
-        for idx, local_child in enumerate(local):
-            key = self._child_key(local_child, idx)
-            if key in remote_lookup:
-                merged_child = self._merge_nodes(local_child, remote_lookup[key])
-                consumed_keys.add(key)
-            else:
-                merged_child = copy.deepcopy(local_child)
-            merged_children.append(merged_child)
-
-        local_signatures = {self._child_signature(child) for child in local}
-
-        for idx, remote_child in enumerate(remote_children):
-            key = self._child_key(remote_child, idx)
-            if key in consumed_keys:
-                continue
-            if self._child_signature(remote_child) in local_signatures:
-                continue
-            merged_children.append(copy.deepcopy(remote_child))
-
-        merged[:] = merged_children
-        return merged
-
-    def _child_key(self, element: etree._Element, position: int) -> Tuple[str, Optional[str], Optional[str], int]:
-        for attr in ("name", "id"):
-            if attr in element.attrib:
-                return (element.tag, attr, element.get(attr), 0)
-        return (element.tag, None, None, position)
-
-    def _child_signature(self, element: etree._Element) -> Tuple[str, Optional[str], Optional[str]]:
-        for attr in ("name", "id"):
-            if attr in element.attrib:
-                return (element.tag, attr, element.get(attr))
-        return (element.tag, None, None)
 
 
 def _strip_namespace(value: str) -> Tuple[str, str]:
@@ -352,6 +372,7 @@ class AttributeSelectHydrationStrategy(HydrationStrategy):
             return value.decode("UTF-8")
         return str(value)
 
+
 class SelectHydrationStrategy(HydrationStrategy):
     """Resolves ``select`` attributes by cloning referenced nodes."""
 
@@ -367,27 +388,62 @@ class SelectHydrationStrategy(HydrationStrategy):
         processed: List[HydrationItem] = []
         for item in items:
             element = item.element
-            nodes_with_select = list(element.xpath(".//*[@select]"))
-            if element.get("select"):
-                nodes_with_select.insert(0, element)
-            for node in nodes_with_select:
-                if any(ancestor.get("use") for ancestor in node.iterancestors()):
-                    continue
-                select_expr = node.get("select")
-                if not select_expr:
-                    raise HydrationError("Encountered select attribute without a value during hydration.")
-                replacement_source = self._resolve_reference(select_expr, document_root, item.context_node)
-                replacement_copy = copy.deepcopy(replacement_source)
-                self._merge_into_base(replacement_copy, node)
 
-                parent = node.getparent()
-                if parent is None:
-                    item.element = replacement_copy
-                    continue
+            while True:
+                nodes_with_select = [
+                    node
+                    for node in element.xpath(".//*[@select]")
+                    if not any(ancestor.get("use") for ancestor in node.iterancestors())
+                ]
+                if not nodes_with_select:
+                    break
 
-                insertion_index = parent.index(node)
-                parent.insert(insertion_index, replacement_copy)
-                parent.remove(node)
+                for node in nodes_with_select:
+                    select_expr = node.get("select")
+                    if not select_expr:
+                        raise HydrationError(
+                            "Encountered select attribute without a value during hydration."
+                        )
+                    replacement_source = self._resolve_reference(
+                        select_expr,
+                        document_root,
+                        item.context_node,
+                    )
+
+                    parent = node.getparent()
+                    if parent is None:
+                        raise HydrationError(
+                            f"Cannot hydrate element <{node.tag}> without a parent; select expression '{select_expr}' is invalid."
+                        )
+
+                    merged = _merge_elements(
+                        node,
+                        replacement_source,
+                        ignore_local_attrs={"select"},
+                    )
+                    merged.attrib.pop("select", None)
+
+                    insertion_index = parent.index(node)
+                    tail_text = node.tail
+                    parent.remove(node)
+
+                    hydrated_replacements = engine.hydrate_element(
+                        merged,
+                        document_root,
+                        context_node=item.context_node,
+                    )
+                    if not hydrated_replacements:
+                        raise HydrationError(
+                            f"Hydration produced no nodes for select expression '{select_expr}'."
+                        )
+
+                    for offset, replacement_item in enumerate(hydrated_replacements):
+                        replacement = replacement_item.element
+                        if offset == len(hydrated_replacements) - 1:
+                            replacement.tail = tail_text
+                        else:
+                            replacement.tail = None
+                        parent.insert(insertion_index + offset, replacement)
 
             processed.append(item)
         return processed
@@ -428,58 +484,3 @@ class SelectHydrationStrategy(HydrationStrategy):
                 f"Select expression '{select_expr}' resolved to {len(elements)} elements; expected exactly one."
             )
         return elements[0]
-
-    def _merge_into_base(self, base: etree._Element, overlay: etree._Element) -> None:
-        base.attrib.pop('select', None)
-
-        for name, value in overlay.attrib.items():
-            if name == 'select':
-                continue
-            if value is None:
-                continue
-            value_str = str(value).strip()
-            if value_str:
-                base.attrib[name] = value_str
-
-        if overlay.text and overlay.text.strip():
-            base.text = overlay.text
-
-        used_children: Set[int] = set()
-        for overlay_child in overlay:
-            match = self._find_matching_child(base, overlay_child, used_children)
-            if match is None:
-                base.append(copy.deepcopy(overlay_child))
-            else:
-                self._merge_into_base(match, overlay_child)
-                used_children.add(id(match))
-
-        if overlay.tail and overlay.tail.strip():
-            base.tail = overlay.tail
-
-    def _find_matching_child(
-        self,
-        base: etree._Element,
-        overlay_child: etree._Element,
-        used_children: Set[int],
-    ) -> Optional[etree._Element]:
-        key = self._child_identity_key(overlay_child)
-        if key is not None:
-            for child in base:
-                if id(child) in used_children:
-                    continue
-                if self._child_identity_key(child) == key:
-                    return child
-
-        for child in base:
-            if id(child) in used_children:
-                continue
-            if child.tag == overlay_child.tag:
-                return child
-        return None
-
-    def _child_identity_key(self, element: etree._Element) -> Optional[Tuple[str, str]]:
-        for attr in ('id', 'name', 'ref-name'):
-            value = element.get(attr)
-            if value:
-                return (element.tag, value)
-        return None

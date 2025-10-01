@@ -24,6 +24,7 @@ const REQUEST_PYTHON = resolvePythonExecutable('request-orchestrator');
 const REQUEST_RUNNER = path.join(repoRoot, 'services/request-orchestrator/app/local_runner.py');
 const REQUEST_XML_PATH = path.join(repoRoot, 'request.xml');
 const REQUEST3_XML_PATH = path.join(repoRoot, 'request3.xml');
+const REQUEST5_XML_PATH = path.join(repoRoot, 'request5.xml');
 
 const REDIS_URL = resolveTestRedisUrl();
 
@@ -98,6 +99,19 @@ test('integration: sync submission returns composed response', { concurrency: fa
   const status = await queryService.getStatus(result.requestId);
   assert.equal(status.status, 'succeeded');
 });
+
+test('integration: sync submission returns composed response with merged hydrated select', { concurrency: false }, async (t) => {
+  const harness = await createHarness(REQUEST5_XML_PATH, t);
+  const { submissionService, queryService, xml } = harness;
+
+  const result = await submissionService.submit({ xml, sync: true });
+  assert.equal(result.status, 'completed');
+  // console.log('responseXml: ', format(result['responseXml']))
+  assert.ok(result.responseXml);
+  const status = await queryService.getStatus(result.requestId);
+  assert.equal(status.status, 'succeeded');
+});
+
 
 async function createHarness(request_xml_path, t) {
   const xml = await readFile(request_xml_path, 'utf8');
