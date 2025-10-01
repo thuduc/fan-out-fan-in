@@ -56,22 +56,38 @@ def _merge_elements(
     merged.tail = local.tail
 
     remote_children = list(remote)
-    remote_lookup = { _child_key(child, idx): child for idx, child in enumerate(remote_children) }
+    remote_lookup = {_child_key(child, idx): child for idx, child in enumerate(remote_children)}
     consumed_keys: set[Tuple[str, Optional[str], Optional[str], int]] = set()
+    consumed_signatures: set[Tuple[str, Optional[str], Optional[str]]] = set()
 
     merged_children: List[etree._Element] = []
     for idx, local_child in enumerate(local):
         key = _child_key(local_child, idx)
-        if key in remote_lookup:
+        remote_child = remote_lookup.get(key)
+
+        if remote_child is None:
+            signature = _child_signature(local_child)
+            for r_idx, candidate in enumerate(remote_children):
+                candidate_key = _child_key(candidate, r_idx)
+                if candidate_key in consumed_keys:
+                    continue
+                if _child_signature(candidate) == signature:
+                    remote_child = candidate
+                    key = candidate_key
+                    break
+
+        if remote_child is not None:
             merged_child = _merge_elements(
                 local_child,
-                remote_lookup[key],
+                remote_child,
                 ignore_local_attrs=local_ignore,
                 ignore_remote_attrs=remote_ignore,
             )
             consumed_keys.add(key)
+            consumed_signatures.add(_child_signature(remote_child))
         else:
             merged_child = copy.deepcopy(local_child)
+
         merged_children.append(merged_child)
 
     local_signatures = {_child_signature(child) for child in local}
@@ -80,7 +96,8 @@ def _merge_elements(
         key = _child_key(remote_child, idx)
         if key in consumed_keys:
             continue
-        if _child_signature(remote_child) in local_signatures:
+        signature = _child_signature(remote_child)
+        if signature in local_signatures and signature in consumed_signatures:
             continue
         merged_children.append(copy.deepcopy(remote_child))
 
