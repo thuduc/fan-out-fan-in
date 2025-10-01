@@ -52,7 +52,10 @@ def _merge_elements(
             continue
         merged.set(key, value)
 
-    merged.text = local.text if local.text and local.text.strip() else remote.text
+    if "select" in local.attrib and remote.text is not None:
+        merged.text = remote.text
+    else:
+        merged.text = local.text if local.text and local.text.strip() else remote.text
     merged.tail = local.tail
 
     remote_children = list(remote)
@@ -433,12 +436,7 @@ class SelectHydrationStrategy(HydrationStrategy):
                             f"Cannot hydrate element <{node.tag}> without a parent; select expression '{select_expr}' is invalid."
                         )
 
-                    merged = _merge_elements(
-                        node,
-                        replacement_source,
-                        ignore_local_attrs={"select"},
-                    )
-                    merged.attrib.pop("select", None)
+                    merged = _merge_elements(node, replacement_source)
 
                     insertion_index = parent.index(node)
                     tail_text = node.tail
@@ -456,6 +454,7 @@ class SelectHydrationStrategy(HydrationStrategy):
 
                     for offset, replacement_item in enumerate(hydrated_replacements):
                         replacement = replacement_item.element
+                        replacement.attrib.pop("select", None)
                         if offset == len(hydrated_replacements) - 1:
                             replacement.tail = tail_text
                         else:

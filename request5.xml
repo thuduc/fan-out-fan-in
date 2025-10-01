@@ -34,7 +34,7 @@
                     </coupon>
                 </cancellableBond>
                 <volatility>
-                    <sigma>0.11</sigma>
+                    <sigma>0.11111</sigma>
                 </volatility>
             </instrument>
             <instrument name="Instrument2">
