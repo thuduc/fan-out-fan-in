@@ -138,6 +138,9 @@ class RequestOrchestrator:
             ],
         )
 
+        # order all valuation nodes under each group by vndb/@externalId
+        self.sort_valuations_by_group(root)
+
         response_xml = etree.tostring(root, pretty_print=True, encoding="unicode")
         self.redis.set(response_key, response_xml)
         self._mark_request_state(
@@ -153,6 +156,14 @@ class RequestOrchestrator:
         close_redis(self.redis_task_update_stream)
 
         return {"responseKey": response_key, "groupCount": group_count}
+    
+    def sort_valuations_by_group(self, root: etree._Element):
+        project = root.find("project")
+        if project is not None:
+            for group in project.findall("group"):
+                valuations = group.findall("valuation")
+                if (valuations):
+                    group[:] = sorted(valuations, key=lambda v: int(v.find('vndb').get('externalId')))
 
     # --- Dispatch helpers -----------------------------------------------------------------
 
@@ -206,6 +217,8 @@ class RequestOrchestrator:
             group_task_req = copy.deepcopy(group_task_req_template)
             valuation_index += 1
             task_id = str(valuation_index)
+            # add child node to valuation to be used for sorting later: <vndb externalId="task_id"/>
+            valuation.append(etree.Element("vndb", externalId=task_id))
             # create task_xml by using group_task_req to append valuation node to ./project/group
             group_task_req.find("project").find("group").append(copy.deepcopy(valuation))
             task_xml = etree.tostring(group_task_req, pretty_print=True, encoding="unicode")
@@ -338,9 +351,9 @@ class RequestOrchestrator:
                         # append valuation result to group
                         task_result_root = etree.fromstring(xml_payload.encode("UTF-8"))
                         # uncomment to use in production
-                        #valudation_result = task_result_root.find("job/task/results/vnml/project/group/valuation")
-                        valudation_result = task_result_root.find("project/group/valuation")
-                        group.append(copy.deepcopy(valudation_result))
+                        #valuation_result = task_result_root.find("job/task/results/vnml/project/group/valuation")
+                        valuation_result = task_result_root.find("project/group/valuation")
+                        group.append(copy.deepcopy(valuation_result))
 
                         self.redis.hset(
                             GROUP_STATE_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index),
