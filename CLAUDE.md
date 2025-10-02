@@ -10,21 +10,21 @@ This is a distributed fan-out/fan-in XML request processing system built using N
 
 The system uses three microservices:
 
-1. **Main Orchestrator** (Node.js on AWS Fargate)
+1. **vnapi** (Node.js on AWS Fargate)
    - Entry point for XML valuation requests
    - Exposes REST API on port 8080
    - Consumes `stream:request:ingest` Redis Stream
-   - Asynchronously invokes Request Orchestrator Lambda per request
+   - Asynchronously invokes vnvs Lambda per request
    - Tracks high-level lifecycle states
 
-2. **Request Orchestrator** (Python Lambda)
+2. **vnvs** (Python Lambda)
    - Single-request scope orchestrator
    - Enforces sequential group execution
-   - Fans out tasks within a group to Task Processors
+   - Fans out tasks within a group to vnas
    - Waits for group completion before advancing
    - Assembles final response XML from task results
 
-3. **Task Processor** (Python Lambda)
+3. **vnas** (Python Lambda)
    - Stateless worker executing individual valuation tasks
    - Consumes `stream:task:dispatch` Redis Stream
    - Publishes results to `stream:task:updates`
@@ -32,10 +32,10 @@ The system uses three microservices:
 ### Redis Topology
 
 **Streams:**
-- `stream:request:ingest` - Ingress for new requests (consumed by Main Orchestrator)
+- `stream:request:ingest` - Ingress for new requests (consumed by vnapi)
 - `stream:request:lifecycle` - Request state changes (multi-subscriber)
-- `stream:task:dispatch` - Task execution queue (consumed by Task Processors)
-- `stream:task:updates` - Task completion/error events (consumed by Request Orchestrator)
+- `stream:task:dispatch` - Task execution queue (consumed by vnas)
+- `stream:task:updates` - Task completion/error events (consumed by vnvs)
 
 **Cache Keys:**
 - `cache:request:<requestId>:xml` - Original XML payload
@@ -49,11 +49,11 @@ The system uses three microservices:
 
 ### Group Ordering Constraint
 
-Groups must execute sequentially (group N cannot start until group N-1 completes) because later groups depend on results from prior groups. The Request Orchestrator is the sole authority for group advancement.
+Groups must execute sequentially (group N cannot start until group N-1 completes) because later groups depend on results from prior groups. vnvs is the sole authority for group advancement.
 
 ### XML Hydration System
 
-The Request Orchestrator includes a hydration engine that resolves references in task XML:
+vnvs includes a hydration engine that resolves references in task XML:
 
 - `<element href="s3://bucket/key">` - Fetches content from S3
 - `<element href="file://path">` - Fetches from local filesystem
@@ -71,9 +71,9 @@ All tests require Redis running on localhost:6379. Start Redis with:
 docker run --rm -p 6379:6379 redis:7
 ```
 
-**Main Orchestrator (Node.js):**
+**vnapi (Node.js):**
 ```bash
-cd services/main-orchestrator
+cd services/vnapi
 
 # Unit tests only (API and orchestrator logic)
 node --test test/api.test.js test/mainOrchestrator.test.js
@@ -85,30 +85,50 @@ node --test test/integration.test.js
 npm test
 ```
 
-**Request Orchestrator (Python):**
+**vnvs (Python):**
 ```bash
-cd services/request-orchestrator
+cd services/vnvs
 source venv/bin/activate
 pip install -r requirements.txt
-python -m unittest
+
+# Run all tests
+python -m unittest discover -s tests -p "test_*.py" -v
+
+# Run specific test file
+python -m unittest tests.test_orchestrator -v
+python -m unittest tests.test_select_hydration -v
+
 deactivate
 ```
 
-**Task Processor (Python):**
+**vnas (Python):**
 ```bash
-cd services/task-processor
+cd services/vnas
 source venv/bin/activate
 pip install -r requirements.txt
-python -m unittest
+
+# Run all tests
+python -m unittest discover -s tests -p "test_*.py" -v
+
+# Run specific test file
+python -m unittest tests.test_processor -v
+
 deactivate
 ```
 
 Python tests use dedicated Redis databases (DB 13 and 14) to avoid conflicts.
 
+**Important Notes:**
+- The virtual environment (venv) must exist in each Python service directory
+- If venv doesn't exist, create it with: `python3 -m venv venv`
+- All Python tests run against Redis on localhost:6379 (different DB numbers for isolation)
+- **Python 3.12+ is required** for all Python services
+- **Node.js 20+ is required** for the vnapi service
+
 ### Running the API
 
 ```bash
-cd services/main-orchestrator
+cd services/vnapi
 npm install  # optional if dependencies already bundled
 npm start    # launches src/server.js
 ```
@@ -150,7 +170,7 @@ curl 'http://localhost:8080/valuation/<requestId>/results'
 
 ## Code Structure
 
-**Main Orchestrator** (`services/main-orchestrator/src/`):
+**vnapi** (`services/vnapi/src/`):
 - `server.js` - Entry point, bootstraps Express and orchestrator
 - `httpApp.js` - Express route definitions
 - `mainOrchestrator.js` - Stream consumer for request ingestion
@@ -160,7 +180,7 @@ curl 'http://localhost:8080/valuation/<requestId>/results'
 - `lifecyclePublisher.js` - Publishes lifecycle events
 - `lambdaInvoker.js` - AWS Lambda invocation wrapper
 
-**Request Orchestrator** (`services/request-orchestrator/app/`):
+**vnvs** (`services/vnvs/app/`):
 - `orchestrator.py` - Main orchestration logic, group sequencing
 - `task_invoker.py` - Task dispatch to Redis Stream
 - `hydrator.py` - XML hydration coordinator
@@ -168,19 +188,19 @@ curl 'http://localhost:8080/valuation/<requestId>/results'
 - `hydration/strategies.py` - Hydration strategies (href, select, use)
 - `hydration/fetchers/` - Resource fetchers (S3, file, composite)
 
-**Task Processor** (`services/task-processor/app/`):
+**vnas** (`services/vnas/app/`):
 - `handler.py` - Lambda entry point
 - `processor.py` - Task execution logic
 
 ## Important Implementation Details
 
 - **Node.js version**: 20+ required
-- **Python version**: 3.11 for Lambda services
-- **Synchronous requests**: Main Orchestrator uses `XREAD` (non-group) on lifecycle stream to avoid interfering with other consumers
+- **Python version**: 3.12+ required for all services (vnvs, vnas)
+- **Synchronous requests**: vnapi uses `XREAD` (non-group) on lifecycle stream to avoid interfering with other consumers
 - **Idempotency**: Task results include attempt number to prevent overwriting success with stale retry data
-- **Error handling**: Task workers publish failures to `stream:task:updates`; Request Orchestrator retries up to `MAX_TASK_RETRIES` (default: 3)
-- **Lambda timeout**: Request Orchestrator may self-reinvoke for long-running requests to avoid Lambda timeout
-- **XML encoding**: Task XMLs use proper encoding handling for special characters (see services/main-orchestrator/src/utils.js)
+- **Error handling**: Task workers publish failures to `stream:task:updates`; vnvs retries up to `MAX_TASK_RETRIES` (default: 3)
+- **Lambda timeout**: vnvs may self-reinvoke for long-running requests to avoid Lambda timeout
+- **XML encoding**: Task XMLs use proper encoding handling for special characters (see services/vnapi/src/utils.js)
 
 ## Key Files for Understanding System
 

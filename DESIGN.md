@@ -7,27 +7,27 @@
 - Ensure horizontal scalability, idempotent execution, and observability across asynchronous microservices.
 
 ## 2. Actors & Responsibilities
-### 2.1 Main Orchestrator (Node.js on AWS Fargate)
+### 2.1 vnapi (Node.js on AWS Fargate)
 - Maintains a long-lived consumer on the global `stream:request:ingest` Redis Stream.
 - Persists incoming request envelopes (metadata only) and adds request XML to Redis Cache.
-- Asynchronously invokes the Request Orchestrator Lambda per request (`Invoke` with event payload referencing cache keys).
+- Asynchronously invokes the vnvs Lambda per request (`Invoke` with event payload referencing cache keys).
 - Tracks high-level lifecycle states in Redis and emits status events to `stream:request:lifecycle` for downstream consumers (audit/UI).
 
-### 2.2 Request Orchestrator (Python Lambda)
+### 2.2 vnvs (Python Lambda)
 - Single-request scope; orchestrates sequential group execution.
 - Rehydrates request context/task definitions from Redis Cache.
 - Generates per-group task XMLs, stores them in Redis Cache, registers expectations, and pushes dispatch events onto `stream:task:dispatch`.
 - Monitors completion events on `stream:task:updates` using a request-scoped consumer group; waits for all tasks in the current group to finish before advancing.
 - Builds final request response XML from cached task results; stores it in Redis Cache and signals completion via `stream:request:lifecycle` and status keys.
 
-### 2.3 Task Processor (Python Lambda)
+### 2.3 vnas (Python Lambda)
 - Triggered (via EventBridge rule or AWS Lambda poller) by entries on `stream:task:dispatch`.
 - Fetches task XML/input from Redis Cache, executes valuation logic, persists results to Redis Cache, and publishes completion data to `stream:task:updates`.
 - Emits errors/failures to the same updates stream with status metadata for retry decisions.
 
 ## 3. Redis Topology
 ### 3.1 Streams (all capped via `XTRIM` policies)
-- `stream:request:ingest`: ingress events from upstream producers; consumed by Main Orchestrator using consumer group `orchestrator-main`.
+- `stream:request:ingest`: ingress events from upstream producers; consumed by vnapi using consumer group `orchestrator-main`.
 - `stream:request:lifecycle`: state changes for requests (`received`, `started`, `group_completed`, `succeeded`, `failed`, etc.); multiple subscribers.
 - `stream:task:dispatch`: queue of individual task execution requests; consumed by Lambda poller consumer group `task-workers`.
 - `stream:task:updates`: completion/error events from task processors; read by request-scoped consumer groups (`req::<requestId>`), and optionally by observability tooling.
@@ -46,8 +46,8 @@
 ### 4.1 Request Ingestion
 1. Upstream producer uploads XML (HTTP/SQS/etc.).
 2. Producer writes to Redis Cache `cache:request:<id>:xml` and adds metadata entry to `stream:request:ingest` (`requestId`, `payloadKey`, `groupCount`, etc.).
-3. Main Orchestrator (Fargate) consumes the event, validates metadata, and records `state:request:<id>` with `status=received`.
-4. Main Orchestrator emits `received` status on `stream:request:lifecycle` and asynchronously invokes Request Orchestrator Lambda with `{requestId}`.
+3. vnapi (Fargate) consumes the event, validates metadata, and records `state:request:<id>` with `status=received`.
+4. vnapi emits `received` status on `stream:request:lifecycle` and asynchronously invokes vnvs Lambda with `{requestId}`.
 
 ### 4.2 Request Orchestration Per Group
 1. Lambda loads metadata and group definitions from cache.
@@ -74,22 +74,22 @@
 4. On error, worker records failure result (`payloadKey` reused), increments `attempt`, and publishes `status=failed` with `errorCode`. Retry policy handled via Section 6.
 
 ## 5. Maintaining Group Ordering
-- Request Orchestrator remains the single authority for group advancement; it does not dispatch group `g+1` until `state:request:<id>:group:<g>` indicates all tasks succeeded.
+- vnvs remains the single authority for group advancement; it does not dispatch group `g+1` until `state:request:<id>:group:<g>` indicates all tasks succeeded.
 - Task processors are stateless and unaware of group ordering, preventing accidental parallelism across groups.
 - The consumer group `req::<requestId>` ensures the orchestrator can block for completion notifications without missing events, even across Lambda re-invocations.
 - For long-running requests, the orchestrator persists checkpoint (`state:request:<id>:currentGroup`, outstanding task IDs) and re-schedules itself via Lambda re-invocation (self-trigger or Step Functions) before hitting timeout.
 
 ## 6. Failure Handling & Retries
-- Task workers do **not** retry automatically; they publish `status=failed`. Request Orchestrator decides to retry up to configured limit (e.g., 3).
+- Task workers do **not** retry automatically; they publish `status=failed`. vnvs decides to retry up to configured limit (e.g., 3).
 - Retry flow: orchestrator re-enqueues failed task by XADDing new entry with incremented `attempt`, updates counters (`pendingRetries`).
 - Poison pill handling: after max attempts, group marked `failed`; orchestrator emits `failed` lifecycle event and stores failure report in Redis (`cache:request:<id>:failure`).
 - Stream reliability: use `XACK` only after processing; rely on `XPENDING` to detect stuck consumers. Operational agents can `XCLAIM` and reassign messages.
 - Lambda idempotency: each task result write includes `eTag` or `attempt` to prevent overwriting success with stale retry data.
 
 ## 7. Scalability & Throughput
-- Main Orchestrator horizontally scales via ECS service count; all instances share consumer group `orchestrator-main` to distribute request ingestion load.
-- Request Orchestrator Lambdas scale per request; concurrency limits tuned via account settings.
-- Task Lambdas scale with stream backlog; ensure sufficient concurrency settings and use batching (e.g., poll 10 entries).
+- vnapi horizontally scales via ECS service count; all instances share consumer group `orchestrator-main` to distribute request ingestion load.
+- vnvs Lambdas scale per request; concurrency limits tuned via account settings.
+- vnas Lambdas scale with stream backlog; ensure sufficient concurrency settings and use batching (e.g., poll 10 entries).
 - Redis cluster should use replication/sharding (Redis Enterprise or Elasticache) with stream key hashing to balance slots (`hash tags` like `{request:<id>}`).
 - XML payload caching avoids inflating streams and allows random access by IDs.
 

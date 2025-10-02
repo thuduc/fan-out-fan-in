@@ -1,10 +1,10 @@
 I need to add a rest API to the existing system using the following requirements.
 - Refer to DESIGN.md for how the current codebase is implemented
-- I want to add the following rest resources to the main-orchestrator service (under the main-orchestrator folder):
+- I want to add the following rest resources to vnapi (under the vnapi folder):
   - POST to /valuation?sync=Y, where the payload is the request xml. The sync query param can be Y or N. If Y, it's a synchronous request. If N, it's an asynchronous request. Here's the expected behavior for sync and async:
     - first, the implementation of this rest resource will write the XML to Redis Cache `cache:request:<id>:xml`
-    - then if sync=Y, the main-orchestrator then needs to wait for the xml request result from the request-orchestrator, before returning the result to the client. Use redis stream & cache to implement this functionality.
-    - else if sync=N, the main-orchestrator then returns the generated request id (uuid)
+    - then if sync=Y, vnapi then needs to wait for the xml request result from vnvs, before returning the result to the client. Use redis stream & cache to implement this functionality.
+    - else if sync=N, vnapi then returns the generated request id (uuid)
   - GET to /valuation/:reqId/status to return the status of the current request
   - GET to /valuation/:reqId/results to return the xml results of the previously submitted request using the request id
 - Use express.js for the rest API implementation

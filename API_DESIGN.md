@@ -1,20 +1,20 @@
-# Main Orchestrator REST API Design
+# vnapi REST API Design
 
 ## 1. Goals & Scope
-- Extend the existing Node.js main orchestrator with an Express-based REST API that handles inbound XML valuation requests and exposes status/result retrieval endpoints.
+- Extend the existing Node.js vnapi with an Express-based REST API that handles inbound XML valuation requests and exposes status/result retrieval endpoints.
 - Maintain compatibility with the current Redis-driven orchestration model documented in `DESIGN.md` by reusing the `stream:request:ingest` ingress flow, lifecycle stream, and cache/state keys.
 - Provide synchronous (`sync=Y`) and asynchronous (`sync=N`) submission semantics without impacting existing stream consumers or Lambda orchestration.
 
-## 2. Service Additions (main-orchestrator)
+## 2. Service Additions (vnapi)
 - Introduce an Express HTTP server hosted alongside the existing polling loop. The service will start the REST API and the Redis stream consumer within the same process, sharing Redis connections/pools.
 - Add a thin application layer (`RequestSubmissionService`) responsible for:
   - Validating and normalising incoming XML payloads.
   - Generating request IDs (UUID v4) and storing XML in Redis cache.
-  - Emitting ingestion events to `stream:request:ingest` using the existing envelope format consumed by `MainOrchestrator`.
+  - Emitting ingestion events to `stream:request:ingest` using the existing envelope format consumed by the main orchestrator.
   - Optionally awaiting completion via Redis streams for synchronous submissions.
 - Provide a `RequestQueryService` to encapsulate state/result lookups (`state:request:<id>`, `cache:request:<id>:response`).
 - HTTP server wiring:
-  - `server.js` (new entry point) bootstraps Express, registers routes, and holds references to the request services and `MainOrchestrator` polling loop.
+  - `server.js` (new entry point) bootstraps Express, registers routes, and holds references to the request services and orchestrator polling loop.
   - Graceful shutdown hooks stop the orchestrator poller and close Redis connections when the HTTP server terminates.
 
 ## 3. Redis Usage Enhancements
@@ -74,10 +74,10 @@
      - If the state key is absent (expired), respond `410 Gone`.
 
 ## 5. Interaction with Existing Components
-- **MainOrchestrator Stream Consumer** remains unchanged; it processes entries emitted by the new API exactly like external producers.
-- **Lambda Orchestrator / Task Processor** require no modifications; they continue reading and writing Redis data as defined in `DESIGN.md`.
+- **vnapi Stream Consumer** remains unchanged; it processes entries emitted by the new API exactly like external producers.
+- **vnvs / vnas** require no modifications; they continue reading and writing Redis data as defined in `DESIGN.md`.
 - **Lifecycle Publisher** already writes to `stream:request:lifecycle`, enabling synchronous waits. Ensure lifecycle events include `requestId` field (existing behaviour) so API waiters can filter accurately.
-- **State Repository** keys remain consistent; API read operations rely on existing storage logic executed by the main orchestrator and request orchestrator.
+- **State Repository** keys remain consistent; API read operations rely on existing storage logic executed by vnapi and vnvs.
 
 ## 6. Concurrency & Failure Considerations
 - **Synchronous Wait Timeouts**: Configurable (e.g., via env `SYNC_WAIT_TIMEOUT_MS`). On timeout, request stays active in the system; clients can poll status/results endpoints.
@@ -112,7 +112,7 @@
 ## 10. Backward Compatibility & Rollout
 - Enabling the REST API does not alter existing stream consumption; upstream producers can continue pushing directly to `stream:request:ingest`.
 - Rollout plan:
-  1. Deploy new service version with REST API disabled by feature flag (`ENABLE_HTTP=false`).
+  1. Deploy new vnapi version with REST API disabled by feature flag (`ENABLE_HTTP=false`).
   2. Once stable, enable HTTP to accept traffic.
   3. Monitor Redis stream lag and API latency to ensure synchronous waits do not starve orchestrator polling (consider worker concurrency to isolate HTTP handling threads).
 
