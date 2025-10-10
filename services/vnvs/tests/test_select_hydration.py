@@ -9,7 +9,7 @@ if str(APP_ROOT) not in sys.path:
     sys.path.append(str(APP_ROOT))
 
 from hydration.engine import HydrationEngine
-from hydration.strategies import SelectHydrationStrategy
+from hydration.strategies import AttributeSelectHydrationStrategy, SelectHydrationStrategy
 
 
 class SelectHydrationStrategyTests(unittest.TestCase):
@@ -58,6 +58,44 @@ class SelectHydrationStrategyTests(unittest.TestCase):
         hydrated_market = self._hydrate_fragment(xml, "//valuation/market")
         self.assertEqual(hydrated_market.xpath("./rate/text()"), ["0.03"])
         self.assertEqual(hydrated_market.xpath("./description/text()"), ["preferred"])
+
+    def test_relative_select_without_leading_dot(self):
+        parser = etree.XMLParser(remove_comments=False)
+        xml = """
+        <root>
+            <context>
+                <child>
+                    <value>123</value>
+                </child>
+            </context>
+        </root>
+        """
+        root = etree.fromstring(xml, parser=parser)
+        context = root.xpath("//context/child")[0]
+        fragment = etree.fromstring("<wrapper><result select=\"value\"/></wrapper>")
+
+        hydrated_wrapper = self.engine.hydrate_element(fragment, root, context_node=context)[0].element
+        values = hydrated_wrapper.xpath("./value/text()")
+
+        self.assertEqual(values, ["123"])
+
+    def test_attribute_select_relative_without_leading_dot(self):
+        parser = etree.XMLParser(remove_comments=False)
+        xml = """
+        <root>
+            <context>
+                <child code="ABC"/>
+            </context>
+        </root>
+        """
+        root = etree.fromstring(xml, parser=parser)
+        context = root.xpath("//context")[0]
+        fragment = etree.fromstring('<ref code="${select(child/@code)}"/>')
+        engine = HydrationEngine(strategies=[AttributeSelectHydrationStrategy()])
+
+        hydrated = engine.hydrate_element(fragment, root, context_node=context)[0].element
+
+        self.assertEqual(hydrated.get("code"), "ABC")
 
 
 if __name__ == "__main__":

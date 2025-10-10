@@ -434,16 +434,12 @@ class AttributeSelectHydrationStrategy(HydrationStrategy):
     ) -> str:
         if xpath_expr.startswith("/"):
             results = document_root.xpath(xpath_expr)
-        elif xpath_expr.startswith("."):
+        else:
             if context_node is None:
                 raise HydrationError(
                     f"XPath '{xpath_expr}' requires a context node provided by a custom function."
                 )
             results = context_node.xpath(xpath_expr)
-        else:
-            raise HydrationError(
-                f"Attribute select XPath '{xpath_expr}' must be absolute or relative."
-            )
 
         if not results:
             raise HydrationError(
@@ -545,11 +541,6 @@ class SelectHydrationStrategy(HydrationStrategy):
                 matches = document_root.xpath(select_expr)
                 self._reference_cache[cache_key] = self._validate_match(select_expr, matches)
             return self._reference_cache[cache_key]
-
-        if not select_expr.startswith("."):
-            raise HydrationError(
-                f"Select expression '{select_expr}' must be absolute or relative to the custom function context."
-            )
 
         if context_node is None:
             raise HydrationError(
