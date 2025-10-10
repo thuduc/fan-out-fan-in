@@ -162,8 +162,9 @@ class RequestOrchestrator:
         if project is not None:
             for group in project.findall("group"):
                 valuations = group.findall("valuation")
-                if (valuations):
-                    group[:] = sorted(valuations, key=lambda v: int(v.find('vndb').get('externalId')))
+                if valuations:
+                    # Defensive: handle valuations without vndb tracking element
+                    group[:] = sorted(valuations, key=lambda v: int(v.find('vndb').get('externalId', '0')) if v.find('vndb') is not None else 0)
 
     # --- Dispatch helpers -----------------------------------------------------------------
 
