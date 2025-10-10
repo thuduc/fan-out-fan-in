@@ -186,6 +186,33 @@ class SelectHydrationStrategyTests(unittest.TestCase):
         self.assertEqual(market.get("name"), "Alpha")
         self.assertEqual(market.xpath("./description/text()"), ["Preferred"])
 
+    def test_select_alternatives_with_wildcard(self):
+        xml = """
+        <vnml>
+            <project>
+                <portfolio>
+                    <market name="Nested" id="1"/>
+                </portfolio>
+                <group>
+                    <valuation>
+                        <market select="/vnml/project/nonexistent | //portfolio/market"/>
+                    </valuation>
+                </group>
+            </project>
+        </vnml>
+        """
+        parser = etree.XMLParser(remove_comments=False)
+        root = etree.fromstring(xml, parser=parser)
+        valuation = root.xpath("//group/valuation")[0]
+        engine = HydrationEngine(strategies=[SelectHydrationStrategy()])
+
+        hydrated = engine.hydrate_element(valuation, root)[0].element
+        market = hydrated.find("market")
+
+        self.assertIsNotNone(market)
+        self.assertEqual(market.get("name"), "Nested")
+        self.assertEqual(market.get("id"), "1")
+
 
 if __name__ == "__main__":
     unittest.main()
