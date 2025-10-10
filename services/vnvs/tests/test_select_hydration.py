@@ -132,6 +132,60 @@ class SelectHydrationStrategyTests(unittest.TestCase):
         self.assertEqual(hydrated_model.get("name"), "Model's Choice")
         self.assertEqual(hydrated_model.get("version"), "1.0")
 
+    def test_select_with_alternative_expressions(self):
+        xml = """
+        <root>
+            <market name="Primary">
+                <rate>0.05</rate>
+            </market>
+            <valuation>
+                <market select="/root/non-existent | /root/market"/>
+            </valuation>
+        </root>
+        """
+        parser = etree.XMLParser(remove_comments=False)
+        root = etree.fromstring(xml, parser=parser)
+        valuation = root.xpath("//valuation")[0]
+        engine = HydrationEngine(strategies=[SelectHydrationStrategy()])
+
+        hydrated = engine.hydrate_element(valuation, root)[0].element
+        market = hydrated.find("market")
+
+        self.assertIsNotNone(market)
+        self.assertEqual(market.get("name"), "Primary")
+        self.assertEqual(market.xpath("./rate/text()"), ["0.05"])
+
+    def test_select_alternatives_with_placeholder(self):
+        xml = """
+        <vnml>
+            <project>
+                <portfolio>
+                    <selected name="Alpha"/>
+                </portfolio>
+                <market name="Fallback"/>
+                <market name="Alpha">
+                    <description>Preferred</description>
+                </market>
+                <group>
+                    <valuation>
+                        <market select="/vnml/project/market[@name='${select(/vnml/project/portfolio/selected/@name)}'] | /vnml/project/market[@name='Fallback']"/>
+                    </valuation>
+                </group>
+            </project>
+        </vnml>
+        """
+        parser = etree.XMLParser(remove_comments=False)
+        root = etree.fromstring(xml, parser=parser)
+        valuation = root.xpath("//group/valuation")[0]
+        engine = HydrationEngine(strategies=[SelectHydrationStrategy()])
+
+        hydrated = engine.hydrate_element(valuation, root)[0].element
+        market = hydrated.find("market")
+
+        self.assertIsNotNone(market)
+        self.assertEqual(market.get("name"), "Alpha")
+        self.assertEqual(market.xpath("./description/text()"), ["Preferred"])
+
 
 if __name__ == "__main__":
     unittest.main()

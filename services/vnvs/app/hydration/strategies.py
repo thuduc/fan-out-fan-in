@@ -256,6 +256,38 @@ def _substitute_select_placeholders(
     return "".join(parts)
 
 
+def _split_xpath_alternatives(expression: str) -> List[str]:
+    alternatives: List[str] = []
+    current: List[str] = []
+    depth = 0
+    in_single_quote = False
+    in_double_quote = False
+
+    for char in expression:
+        if char == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+        elif char == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+        elif char in ("[", "(") and not in_single_quote and not in_double_quote:
+            depth += 1
+        elif char in ("]", ")") and not in_single_quote and not in_double_quote:
+            depth = max(0, depth - 1)
+
+        if char == "|" and depth == 0 and not in_single_quote and not in_double_quote:
+            alternative = "".join(current).strip()
+            if alternative:
+                alternatives.append(alternative)
+            current = []
+        else:
+            current.append(char)
+
+    tail = "".join(current).strip()
+    if tail:
+        alternatives.append(tail)
+
+    return alternatives or [expression.strip()]
+
+
 class HrefHydrationStrategy(HydrationStrategy):
     """Resolves nodes with href attributes by fetching and merging external XML.
 
@@ -643,24 +675,58 @@ class SelectHydrationStrategy(HydrationStrategy):
         context_node: Optional[etree._Element],
     ) -> etree._Element:
         expanded_expr = _substitute_select_placeholders(select_expr, document_root, context_node)
+        alternatives = _split_xpath_alternatives(expanded_expr)
 
-        if expanded_expr.startswith("/"):
-            cache_key = expanded_expr
+        last_error: Optional[str] = None
+
+        for candidate in alternatives:
+            if not candidate:
+                continue
+            try:
+                result = self._evaluate_candidate(candidate, document_root, context_node)
+                if result is not None:
+                    return result
+            except HydrationError as exc:
+                last_error = str(exc)
+                continue
+
+        message = last_error or f"Select expression '{expanded_expr}' did not resolve to any elements."
+        raise HydrationError(message)
+
+    def _evaluate_candidate(
+        self,
+        candidate: str,
+        document_root: etree._Element,
+        context_node: Optional[etree._Element],
+    ) -> Optional[etree._Element]:
+        if candidate.startswith("/"):
+            cache_key = candidate
             if cache_key not in self._reference_cache:
-                matches = document_root.xpath(expanded_expr)
-                self._reference_cache[cache_key] = self._validate_match(expanded_expr, matches)
+                matches = document_root.xpath(candidate)
+                element = self._validate_optional_match(candidate, matches)
+                self._reference_cache[cache_key] = element
             return self._reference_cache[cache_key]
 
         if context_node is None:
             raise HydrationError(
-                f"Select expression '{expanded_expr}' requires a context node provided by a custom function."
+                f"Select expression '{candidate}' requires a context node provided by a custom function."
             )
 
-        if expanded_expr == ".":
+        if candidate == ".":
             return context_node
 
-        matches = context_node.xpath(expanded_expr)
-        return self._validate_match(expanded_expr, matches)
+        matches = context_node.xpath(candidate)
+        return self._validate_optional_match(candidate, matches)
+
+    def _validate_optional_match(self, select_expr: str, matches: Sequence[object]) -> Optional[etree._Element]:
+        elements = [match for match in matches if isinstance(match, etree._Element)]
+        if not elements:
+            return None
+        if len(elements) != 1:
+            raise HydrationError(
+                f"Select expression '{select_expr}' resolved to {len(elements)} elements; expected exactly one."
+            )
+        return elements[0]
 
     def _validate_match(self, select_expr: str, matches: Sequence[object]) -> etree._Element:
         elements = [match for match in matches if isinstance(match, etree._Element)]
