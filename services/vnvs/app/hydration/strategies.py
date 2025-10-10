@@ -602,6 +602,7 @@ class SelectHydrationStrategy(HydrationStrategy):
 
     def __init__(self) -> None:
         self._reference_cache: dict[str, etree._Element] = {}
+        self._link_cache: dict[Tuple[str, str], Optional[etree._Element]] = {}
 
     def apply(
         self,
@@ -640,7 +641,12 @@ class SelectHydrationStrategy(HydrationStrategy):
                             f"Cannot hydrate element <{node.tag}> without a parent; select expression '{select_expr}' is invalid."
                         )
 
-                    merged = _merge_elements(node, replacement_source, ignore_local_attrs={"select"})
+                    if replacement_source is None:
+                        continue
+                    if select_expr.strip().startswith("vn:link("):
+                        merged = copy.deepcopy(replacement_source)
+                    else:
+                        merged = _merge_elements(node, replacement_source, ignore_local_attrs={"select"})
 
                     insertion_index = parent.index(node)
                     tail_text = node.tail
@@ -699,6 +705,10 @@ class SelectHydrationStrategy(HydrationStrategy):
         document_root: etree._Element,
         context_node: Optional[etree._Element],
     ) -> Optional[etree._Element]:
+        stripped = candidate.strip()
+        if stripped.startswith("vn:link(") and stripped.endswith(")"):
+            return self._evaluate_link_expression(stripped, document_root, context_node)
+
         if candidate.startswith("/"):
             cache_key = candidate
             if cache_key not in self._reference_cache:
@@ -717,6 +727,94 @@ class SelectHydrationStrategy(HydrationStrategy):
 
         matches = context_node.xpath(candidate)
         return self._validate_optional_match(candidate, matches)
+
+    def _evaluate_link_expression(
+        self,
+        expression: str,
+        document_root: etree._Element,
+        context_node: Optional[etree._Element],
+    ) -> Optional[etree._Element]:
+        inner = expression[len("vn:link("):-1]
+        source_expr, child_expr = self._split_link_arguments(inner)
+        cache_key = (source_expr, child_expr)
+        if cache_key in self._link_cache:
+            return self._link_cache[cache_key]
+
+        sources = self._evaluate_link_source(source_expr, document_root, context_node)
+        for source in sources:
+            result = self._evaluate_link_child(child_expr, source)
+            if result is not None:
+                self._link_cache[cache_key] = result
+                return result
+
+        self._link_cache[cache_key] = None
+        return None
+
+    def _split_link_arguments(self, inner: str) -> Tuple[str, str]:
+        parts: List[str] = []
+        current: List[str] = []
+        depth = 0
+        in_single_quote = False
+        in_double_quote = False
+
+        for char in inner:
+            if char == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+            elif char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+            elif char in ("(", "[") and not in_single_quote and not in_double_quote:
+                depth += 1
+            elif char in (")", "]") and not in_single_quote and not in_double_quote:
+                depth = max(0, depth - 1)
+
+            if char == "," and depth == 0 and not in_single_quote and not in_double_quote:
+                part = "".join(current).strip()
+                if part:
+                    parts.append(part)
+                current = []
+            else:
+                current.append(char)
+
+        tail = "".join(current).strip()
+        if tail:
+            parts.append(tail)
+
+        if len(parts) != 2:
+            raise HydrationError("vn:link requires exactly two arguments (sourceXPath, childXPath).")
+
+        return parts[0], parts[1]
+
+    def _evaluate_link_source(
+        self,
+        source_expr: str,
+        document_root: etree._Element,
+        context_node: Optional[etree._Element],
+    ) -> List[etree._Element]:
+        if source_expr.startswith("/"):
+            matches = document_root.xpath(source_expr)
+        else:
+            if context_node is None:
+                raise HydrationError(
+                    f"vn:link source expression '{source_expr}' requires a context node provided by a custom function."
+                )
+            matches = context_node.xpath(source_expr)
+
+        elements = [match for match in matches if isinstance(match, etree._Element)]
+        return elements
+
+    def _evaluate_link_child(self, child_expr: str, source: etree._Element) -> Optional[etree._Element]:
+        if child_expr in (".", "self::node()", "self::*"):
+            return source
+
+        matches = source.xpath(child_expr)
+        elements = [match for match in matches if isinstance(match, etree._Element)]
+        if not elements:
+            return None
+        if len(elements) != 1:
+            raise HydrationError(
+                f"vn:link child expression '{child_expr}' resolved to {len(elements)} elements; expected exactly one."
+            )
+        return elements[0]
 
     def _validate_optional_match(self, select_expr: str, matches: Sequence[object]) -> Optional[etree._Element]:
         elements = [match for match in matches if isinstance(match, etree._Element)]

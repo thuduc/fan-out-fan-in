@@ -213,6 +213,70 @@ class SelectHydrationStrategyTests(unittest.TestCase):
         self.assertEqual(market.get("name"), "Nested")
         self.assertEqual(market.get("id"), "1")
 
+    def test_select_vn_link_child_xpath(self):
+        xml = """
+        <vnml>
+            <project>
+                <group>
+                    <valuation name="security">
+                        <analytics>
+                            <price>
+                                <amount>123.45</amount>
+                            </price>
+                        </analytics>
+                    </valuation>
+                </group>
+                <group>
+                    <valuation>
+                        <analytics>
+                            <price>
+                                <amount select="vn:link(/vnml/project/group[1], valuation[@name='security']/analytics/price/amount)"/>
+                            </price>
+                        </analytics>
+                    </valuation>
+                </group>
+            </project>
+        </vnml>
+        """
+        parser = etree.XMLParser(remove_comments=False)
+        root = etree.fromstring(xml, parser=parser)
+        valuation = root.xpath("//group[2]/valuation")[0]
+        engine = HydrationEngine(strategies=[SelectHydrationStrategy()])
+
+        hydrated = engine.hydrate_element(valuation, root)[0].element
+        amount = hydrated.xpath("./analytics/price/amount")[0]
+
+        self.assertIsNone(amount.get("select"))
+        self.assertEqual(amount.text, "123.45")
+
+    def test_select_vn_link_with_dot_child(self):
+        xml = """
+        <vnml>
+            <project>
+                <model name="href-pure">
+                    <description>Copied</description>
+                </model>
+                <group>
+                    <valuation>
+                        <model name="link-href-pure" select="vn:link(/vnml/project/model[@name='href-pure'], .)"/>
+                    </valuation>
+                </group>
+            </project>
+        </vnml>
+        """
+        parser = etree.XMLParser(remove_comments=False)
+        root = etree.fromstring(xml, parser=parser)
+        valuation = root.xpath("//group/valuation")[0]
+        engine = HydrationEngine(strategies=[SelectHydrationStrategy()])
+
+        hydrated = engine.hydrate_element(valuation, root)[0].element
+        model = hydrated.find("model")
+
+        self.assertIsNotNone(model)
+        self.assertIsNone(model.get("select"))
+        self.assertEqual(model.get("name"), "href-pure")
+        self.assertEqual(model.xpath("./description/text()"), ["Copied"])
+
 
 if __name__ == "__main__":
     unittest.main()
