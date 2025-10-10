@@ -97,6 +97,41 @@ class SelectHydrationStrategyTests(unittest.TestCase):
 
         self.assertEqual(hydrated.get("code"), "ABC")
 
+    def test_nested_select_placeholder_in_predicate(self):
+        xml = """
+        <vnml>
+            <project>
+                <model name="Model's Choice" version="1.0"/>
+                <portfolio>
+                    <instrument>
+                        <appInfo>
+                            <userSelected>
+                                <model name="Model's Choice"/>
+                            </userSelected>
+                        </appInfo>
+                    </instrument>
+                </portfolio>
+                <group>
+                    <valuation>
+                        <model select="/vnml/project/model[@name='${select(/vnml/project/portfolio/instrument/appInfo/userSelected/model/@name)}']"/>
+                    </valuation>
+                </group>
+            </project>
+        </vnml>
+        """
+        parser = etree.XMLParser(remove_comments=False)
+        root = etree.fromstring(xml, parser=parser)
+        valuation = root.xpath("//group/valuation")[0]
+        engine = HydrationEngine(strategies=[SelectHydrationStrategy()])
+
+        hydrated_valuation = engine.hydrate_element(valuation, root)[0].element
+        hydrated_model = hydrated_valuation.find("model")
+
+        self.assertIsNotNone(hydrated_model)
+        self.assertIsNone(hydrated_model.get("select"))
+        self.assertEqual(hydrated_model.get("name"), "Model's Choice")
+        self.assertEqual(hydrated_model.get("version"), "1.0")
+
 
 if __name__ == "__main__":
     unittest.main()

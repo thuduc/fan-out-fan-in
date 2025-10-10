@@ -131,6 +131,131 @@ def _merge_elements(
     return merged
 
 
+_SELECT_PLACEHOLDER_PREFIX = "${select("
+_SELECT_PLACEHOLDER_SUFFIX = ")}"
+
+
+def _evaluate_single_xpath(
+    xpath_expr: str,
+    document_root: etree._Element,
+    context_node: Optional[etree._Element],
+    *,
+    context_label: str,
+) -> str:
+    expression = xpath_expr.strip()
+    if not expression:
+        raise HydrationError(f"{context_label} must not be empty.")
+
+    if expression.startswith("/"):
+        results = document_root.xpath(expression)
+    else:
+        if context_node is None:
+            raise HydrationError(
+                f"{context_label} '{expression}' requires a context node provided by a custom function."
+            )
+        results = context_node.xpath(expression)
+
+    if not results:
+        raise HydrationError(
+            f"{context_label} '{expression}' did not resolve to any values."
+        )
+    if len(results) != 1:
+        raise HydrationError(
+            f"{context_label} '{expression}' resolved to {len(results)} values; expected exactly one."
+        )
+
+    value = results[0]
+    if isinstance(value, etree._Element):
+        return etree.tostring(value, encoding="unicode")
+    if isinstance(value, bytes):
+        return value.decode("UTF-8")
+    return str(value)
+
+
+def _to_xpath_literal(value: str) -> str:
+    if "'" not in value:
+        return f"'{value}'"
+    if '"' not in value:
+        return f'"{value}"'
+
+    parts = value.split("'")
+    pieces: List[str] = []
+    for idx, part in enumerate(parts):
+        if part:
+            pieces.append(f"'{part}'")
+        else:
+            pieces.append("''")
+        if idx != len(parts) - 1:
+            pieces.append('"\'"')
+    return "concat(" + ", ".join(pieces) + ")"
+
+
+def _extract_select_placeholder(expression: str, start: int) -> Tuple[str, int]:
+    cursor = start + len(_SELECT_PLACEHOLDER_PREFIX)
+    depth = 1
+    while cursor < len(expression):
+        char = expression[cursor]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        cursor += 1
+
+    if depth != 0 or cursor >= len(expression):
+        raise HydrationError("Malformed ${select(...)} placeholder: missing closing parenthesis.")
+    if cursor + 1 >= len(expression) or expression[cursor + 1] != "}":
+        raise HydrationError("Malformed ${select(...)} placeholder: expected closing '}'.")
+
+    inner = expression[start + len(_SELECT_PLACEHOLDER_PREFIX):cursor].strip()
+    return inner, cursor + 2
+
+
+def _substitute_select_placeholders(
+    expression: str,
+    document_root: etree._Element,
+    context_node: Optional[etree._Element],
+) -> str:
+    if _SELECT_PLACEHOLDER_PREFIX not in expression:
+        return expression
+
+    parts: List[str] = []
+    index = 0
+    length = len(expression)
+
+    while index < length:
+        start = expression.find(_SELECT_PLACEHOLDER_PREFIX, index)
+        if start == -1:
+            parts.append(expression[index:])
+            break
+
+        placeholder_expression, end = _extract_select_placeholder(expression, start)
+
+        prefix_end = start
+        suffix_start = end
+        if start > index and end < length:
+            prev_char = expression[start - 1]
+            next_char = expression[end]
+            if prev_char == next_char and prev_char in ("'", '"'):
+                prefix_end = start - 1
+                suffix_start = end + 1
+
+        parts.append(expression[index:prefix_end])
+
+        resolved_value = _evaluate_single_xpath(
+            placeholder_expression,
+            document_root,
+            context_node,
+            context_label="Select expression",
+        )
+        parts.append(_to_xpath_literal(resolved_value))
+
+        index = suffix_start
+
+    return "".join(parts)
+
+
 class HrefHydrationStrategy(HydrationStrategy):
     """Resolves nodes with href attributes by fetching and merging external XML.
 
@@ -432,30 +557,12 @@ class AttributeSelectHydrationStrategy(HydrationStrategy):
         *,
         context_node: Optional[etree._Element],
     ) -> str:
-        if xpath_expr.startswith("/"):
-            results = document_root.xpath(xpath_expr)
-        else:
-            if context_node is None:
-                raise HydrationError(
-                    f"XPath '{xpath_expr}' requires a context node provided by a custom function."
-                )
-            results = context_node.xpath(xpath_expr)
-
-        if not results:
-            raise HydrationError(
-                f"Attribute select XPath '{xpath_expr}' did not resolve to any values."
-            )
-        if len(results) != 1:
-            raise HydrationError(
-                f"Attribute select XPath '{xpath_expr}' resolved to {len(results)} values; expected exactly one."
-            )
-
-        value = results[0]
-        if isinstance(value, etree._Element):
-            return etree.tostring(value, encoding="unicode")
-        if isinstance(value, bytes):
-            return value.decode("UTF-8")
-        return str(value)
+        return _evaluate_single_xpath(
+            xpath_expr,
+            document_root,
+            context_node,
+            context_label="Attribute select XPath",
+        )
 
 
 class SelectHydrationStrategy(HydrationStrategy):
@@ -535,23 +642,25 @@ class SelectHydrationStrategy(HydrationStrategy):
         document_root: etree._Element,
         context_node: Optional[etree._Element],
     ) -> etree._Element:
-        if select_expr.startswith("/"):
-            cache_key = select_expr
+        expanded_expr = _substitute_select_placeholders(select_expr, document_root, context_node)
+
+        if expanded_expr.startswith("/"):
+            cache_key = expanded_expr
             if cache_key not in self._reference_cache:
-                matches = document_root.xpath(select_expr)
-                self._reference_cache[cache_key] = self._validate_match(select_expr, matches)
+                matches = document_root.xpath(expanded_expr)
+                self._reference_cache[cache_key] = self._validate_match(expanded_expr, matches)
             return self._reference_cache[cache_key]
 
         if context_node is None:
             raise HydrationError(
-                f"Select expression '{select_expr}' requires a context node provided by a custom function."
+                f"Select expression '{expanded_expr}' requires a context node provided by a custom function."
             )
 
-        if select_expr == ".":
+        if expanded_expr == ".":
             return context_node
 
-        matches = context_node.xpath(select_expr)
-        return self._validate_match(select_expr, matches)
+        matches = context_node.xpath(expanded_expr)
+        return self._validate_match(expanded_expr, matches)
 
     def _validate_match(self, select_expr: str, matches: Sequence[object]) -> etree._Element:
         elements = [match for match in matches if isinstance(match, etree._Element)]
