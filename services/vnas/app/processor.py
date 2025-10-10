@@ -1,17 +1,21 @@
 import json
 import logging
-import subprocess
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
-
-from lxml import etree
+from typing import Dict, Optional, TYPE_CHECKING
 
 try:
     from .constants import TASK_UPDATES_STREAM
 except ImportError:
     from constants import TASK_UPDATES_STREAM
+
+try:
+    from .executor import DefaultTaskExecutor, TaskExecutor
+except ImportError:
+    from executor import DefaultTaskExecutor, TaskExecutor
+
+if TYPE_CHECKING:
+    from .executor import TaskExecutor
 
 LOGGER = logging.getLogger(__name__)
 
@@ -34,11 +38,23 @@ class TaskProcessor:
     Fetches task XML from cache, runs valuation script, stores results,
     and publishes completion events to task updates stream.
     """
-    def __init__(self, redis_client, logger: Optional[logging.Logger] = None, vnas_script: Optional[str] = None):
+    def __init__(
+        self,
+        redis_client,
+        logger: Optional[logging.Logger] = None,
+        vnas_script: Optional[str] = None,
+        executor: Optional['TaskExecutor'] = None
+    ):
         self.redis = redis_client
         self.logger = logger or LOGGER
-        default_script = Path(__file__).resolve().parent / 'vnas.sh'
-        self._vnas_script = Path(vnas_script).resolve() if vnas_script else default_script
+
+        # If no executor provided, create default one
+        if executor is None:
+            default_script = Path(__file__).resolve().parent / 'vnas.sh'
+            script_path = Path(vnas_script).resolve() if vnas_script else default_script
+            executor = DefaultTaskExecutor(script_path)
+
+        self._executor = executor
 
     def handle_dispatch(self, entry: Dict[str, str]) -> Dict[str, str]:
         """
@@ -114,44 +130,6 @@ class TaskProcessor:
             attempt=attempt,
         )
 
-    def _execute_task(self, xml_payload: str) -> Dict[str, object]:
-        """Execute valuation computation on task XML.
-
-        Parses XML, generates valuation amount via external script, updates
-        amount node, and returns serialized XML.
-
-        """
-        # raise NotImplementedError("TaskService.evaluate must be implemented by the integrator.")
-        #print(f"Executing task with payload: {xml_payload}")
-        if isinstance(xml_payload, str):
-            xml_payload = xml_payload.encode("utf-8")
-        valuation_element = etree.fromstring(xml_payload)
-        amount_nodes = valuation_element.xpath(".//analytics/price/amount")
-        if amount_nodes:
-            amount_nodes[0].text = self._generate_amount()
-        return etree.tostring(valuation_element, encoding="UTF-8").decode("UTF-8")
-
-    def _generate_amount(self) -> str:
-        """Generate valuation amount by invoking external script.
-
-        """
-        try:
-            completed = subprocess.run(
-                [str(self._vnas_script)],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except (OSError, subprocess.CalledProcessError) as exc:  # noqa: PERF203
-            raise RuntimeError("Failed to invoke valuation number generator") from exc
-
-        raw_value = completed.stdout.strip()
-        try:
-            amount = float(raw_value)
-        except ValueError as exc:  # pragma: no cover - defensive guard
-            raise RuntimeError("Valuation number generator returned invalid output") from exc
-
-        if amount <= 0:
-            raise RuntimeError("Valuation number generator returned non-positive value")
-
-        return f"{amount:.2f}"
+    def _execute_task(self, xml_payload: str) -> str:
+        """Execute task using injected executor."""
+        return self._executor.execute(xml_payload)

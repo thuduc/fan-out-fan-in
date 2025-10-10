@@ -29,8 +29,9 @@ const REQUEST3_XML_PATH = path.join(repoRoot, 'resources/request3.xml');
 const REDIS_URL = resolveTestRedisUrl();
 
 class LocalRequestInvoker {
-  constructor({ redisUrl }) {
+  constructor({ redisUrl, executorType = 'default' }) {
     this.redisUrl = redisUrl;
+    this.executorType = executorType;
   }
 
   async invokeAsync(payload) {
@@ -49,8 +50,15 @@ class LocalRequestInvoker {
         await redis.quit().catch(() => {});
       }
     }
+
+    // Add executorType to payload
+    const enhancedPayload = {
+      ...payload,
+      executorType: this.executorType
+    };
+
     //console.log(`Invoking local request processor for request ${payload.requestId} and redisUrl ${this.redisUrl}`);
-    await runPython(REQUEST_PYTHON, [REQUEST_RUNNER, JSON.stringify(payload), this.redisUrl]);
+    await runPython(REQUEST_PYTHON, [REQUEST_RUNNER, JSON.stringify(enhancedPayload), this.redisUrl]);
   }
 }
 
@@ -112,8 +120,23 @@ test('integration: sync submission returns composed response with merged hydrate
   assert.equal(status.status, 'succeeded');
 });
 
+test('integration: mock executor returns fixed amount', { concurrency: false }, async (t) => {
+  const harness = await createHarness(REQUEST_XML_PATH, t, 'mock');
+  const { submissionService, queryService, xml } = harness;
 
-async function createHarness(request_xml_path, t) {
+  const result = await submissionService.submit({ xml, sync: true });
+  assert.equal(result.status, 'completed');
+  assert.ok(result.responseXml);
+
+  // Verify mock executor returned fixed amount (999.99)
+  assert.ok(result.responseXml.includes('999.99'), 'Should contain mock fixed amount 999.99');
+
+  const status = await queryService.getStatus(result.requestId);
+  assert.equal(status.status, 'succeeded');
+});
+
+
+async function createHarness(request_xml_path, t, executorType = 'default') {
   const xml = await readFile(request_xml_path, 'utf8');
 
   console.log('Using REDIS_URL:', REDIS_URL);
@@ -129,7 +152,10 @@ async function createHarness(request_xml_path, t) {
   await redisQuery.flushdb();
 
   const logger = createNullLogger();
-  const requestInvoker = new LocalRequestInvoker({ redisUrl: REDIS_URL });
+  const requestInvoker = new LocalRequestInvoker({
+    redisUrl: REDIS_URL,
+    executorType: executorType
+  });
   const stateRepository = new RequestStateRepository(redisMain);
   const lifecyclePublisher = new LifecyclePublisher(redisMain);
   const orchestrator = new MainOrchestrator({

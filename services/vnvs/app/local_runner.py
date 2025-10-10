@@ -54,6 +54,30 @@ def _load_task_processor_cls():
 TaskProcessor = _load_task_processor_cls()
 
 
+class MockTaskExecutor:
+    """Mock executor for testing that returns fixed values."""
+
+    def __init__(self, fixed_amount: str = "999.99"):
+        """Initialize with fixed amount to return."""
+        self._fixed_amount = fixed_amount
+
+    def execute(self, xml_payload: str) -> str:
+        """Execute mock valuation returning fixed amount."""
+        # Import lxml locally to avoid dependency issues
+        from lxml import etree
+
+        if isinstance(xml_payload, str):
+            xml_payload = xml_payload.encode("utf-8")
+
+        valuation_element = etree.fromstring(xml_payload)
+        amount_nodes = valuation_element.xpath(".//analytics/price/amount")
+
+        if amount_nodes:
+            amount_nodes[0].text = self._fixed_amount
+
+        return etree.tostring(valuation_element, encoding="UTF-8").decode("UTF-8")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run RequestOrchestrator locally")
     parser.add_argument("payload", help="JSON payload passed to the orchestrator")
@@ -73,7 +97,11 @@ def main() -> int:
         xml_key = event.get("xmlKey")
         if xml_key and not redis_client.exists(xml_key):
             raise ValueError(f"XML payload {xml_key} is missing before invocation")
-        task_invoker = _LocalTaskInvoker(redis_client, logger)
+
+        # Extract executor type from event
+        executor_type = event.get('executorType', 'default')
+
+        task_invoker = _LocalTaskInvoker(redis_client, logger, executor_type)
         orchestrator = RequestOrchestrator(task_invoker=task_invoker, logger=logger)
         orchestrator.run(event)
     finally:
@@ -89,9 +117,16 @@ def main() -> int:
 class _LocalTaskInvoker(TaskInvoker):
     """Synchronous task invoker used by the integration harness."""
 
-    def __init__(self, redis_client, logger):
+    def __init__(self, redis_client, logger, executor_type='default'):
         super().__init__(client=_StubLambdaClient(), function_name="local-task-processor", logger=logger)
-        self._processor = TaskProcessor(redis_client, logger=logger)
+
+        # Create appropriate executor based on type
+        if executor_type == 'mock':
+            executor = MockTaskExecutor(fixed_amount="999.99")
+        else:
+            executor = None  # Use default
+
+        self._processor = TaskProcessor(redis_client, logger=logger, executor=executor)
 
     def invoke_async(self, payload: dict) -> None:  # type: ignore[override]
         #print(f"Invoking task processor for task {payload.get('taskId')}")
