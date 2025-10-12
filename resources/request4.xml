@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?vnvs?>
+<vnml>
+    <project>
+        <market date="2025-05-27" time="00:00:00">
+            <index date="2025-05-27" name="SOFR_DF" time="00:00:00">
+                <curve>
+                    <quote>
+                        <amount type="FACTOR">1.0</amount>
+                        <date dayCount="ACT_365" type="MATURITY">2025-05-27</date>
+                    </quote>
+                    <quote>
+                        <amount type="FACTOR">0.99988168066779</amount>
+                        <date dayCount="ACT_365" type="MATURITY">2025-05-28</date>
+                    </quote>
+                    <quote>
+                        <amount type="FACTOR">0.9997638933119</amount>
+                        <date dayCount="ACT_365" type="MATURITY">2025-05-29</date>
+                    </quote>
+                </curve>
+                <interpolation type="linear"/>
+            </index>
+        </market>
+        <model name="Hull White Trinomial" show="*">
+            <process>
+                <index name="SOFR_DF" ref="SOFR_DF"/>
+            </process>
+            <volatility>
+                <name>Factor 1 - Term 1</name>
+                <hjm useCurrentCorporate="false">
+                    <factor>
+                        <term>
+                            <signma>0.015</signma>
+                            <beta>0.0</beta>
+                        </term>
+                        <rho>1.0</rho>
+                        <tau>0.0</tau>
+                    </factor>
+                    <rbar>1.0</rbar>
+                </hjm>
+            </volatility>
+        </model>
+        <portfolio name="EconomicTime">
+            <instrument name="0x10.0056">
+                <appInfo application="FTP">
+                    <evaluation>
+                        <date>2025-05-27</date>
+                    </evaluation>
+                    <settlement>
+                        <date>2025-05-27</date>
+                    </settlement>
+                    <maturity>
+                        <date>2035-05-29</date>
+                    </maturity>
+                    <swapPrice>
+                        <amount/>
+                    </swapPrice>
+                    <coupon>
+                        <rate>3.952</rate>
+                    </coupon>
+                    <userSelected>
+                        <model name="Hull White Trinomial"/>
+                        <solveFor>
+                            <price selected="true">
+                                <factor unit="PERCENT">0.0</factor>
+                                <amount>0.0</amount>
+                            </price>
+                            <oas selected="false">
+                                <spread unit="BPS">0.0</spread>
+                            </oas>
+                            <volatility selected="false">
+                                <sigme/>
+                            </volatility>
+                            <coupon selected="false">
+                                <rate unit="PERCENT">3.952</rate>
+                                <spread>
+                                    <rate/>
+                                </spread>
+                            </coupon>
+                            <emptyValue>
+                                <price>
+                                    <factor unit="PERCENT"/>
+                                    <amount/>
+                                </price>
+                                <oas>
+                                    <spread unit="BPS"/>
+                                </oas>
+                                <volatility>
+                                    <sigma/>
+                                </volatility>
+                                <coupon>
+                                    <rate unit="PERCENT"/>
+                                    <spread unit="BPS"/>
+                                </coupon>
+                            </emptyValue>
+                        </solveFor>
+                    </userSelected>
+                </appInfo>
+                <swap>
+                    <pay>
+                        <floatingBond useExactSchedule="true">
+                            <notional>
+                                <amount>1214151.3916986545</amount>
+                            </notional>
+                            <effective>
+                                <date>2025-05-27</date>
+                            </effective>
+                            <maturity>
+                                <date select="/vnml/project//instrument/appInfo/maturity/date"/>
+                            </maturity>
+                            <accruals allowMaturityDateAdjustment="true">
+                                <frequency>
+                                    <term anniversaryDate="29" businessCenter="NEWYORK" rollConvention="MODFOLLOWING" unit="YEAR">1</term>
+                                </frequency>
+                            </accruals>
+                            <payments>
+                                <relativeTo>ARREARS</relativeTo>
+                                <offset rollConvention="MODFOLLOWING" unit="DAY">2</offset>
+                            </payments>
+                            <index name="SOFR_DF">
+                                <curve>
+                                    <quote>
+                                        <term unit="DAY">1</term>
+                                    </quote>
+                                </curve>
+                            </index>
+                            <dayCount>ACT_360</dayCount>
+                        </floatingBond>
+                    </pay>
+                    <receive>
+                        <fixedBond useExactSchedule="true">
+                            <notional>
+                                <amount>1214151.3916986545</amount>
+                            </notional>
+                            <effective>
+                                <date>2025-05-27</date>
+                            </effective>
+                            <maturity>
+                                <date select="/vnml/project//instrument/appInfo/maturity/date"/>
+                            </maturity>
+                            <accruals allowMaturityDateAdjustment="true">
+                                <frequency>
+                                    <term anniversaryDate="29" businessCenter="NEWYORK" rollConvention="MODFOLLOWING" unit="YEAR">1</term>
+                                </frequency>
+                            </accruals>
+                            <payments>
+                                <relativeTo>ARREARS</relativeTo>
+                                <offset rollConvention="MODFOLLOWING" unit="DAY">2</offset>
+                            </payments>
+                            <coupon>
+                                <rate select="/vnml/project/portfolio/instrument/appInfo/userSelected/solveFor/coupon/rate" unit="PERCENT"/>
+                            </coupon>
+                            <dayCount>ACT_360</dayCount>
+                        </fixedBond>
+                    </receive>
+                </swap>
+                <event>
+                    <commitment>
+                        <settlement>
+                            <date>2025-05-27</date>
+                        </settlement>
+                    </commitment>
+                </event>
+                <conversionDayCount>ACT_365</conversionDayCount>
+            </instrument>
+        </portfolio>
+        <calculator name="CURVE_BASED" show="*">
+            <optionAdjustedAnalytics type="DYNAMIC">
+                <shock>
+                    <flat>
+                        <level>0.0025</level>
+                    </flat>
+                </shock>
+            </optionAdjustedAnalytics>
+            <coupon type="MARKET">
+                <method>ANALYTICAL</method>
+            </coupon>
+            <curveBasedAnalytics useCurve="true"/>
+        </calculator>
+        <group name="Vanilla_Swap_LHS">
+            <valuation name="security">
+                <market date="${select(/vnml/project/market/@date)}">
+                    <index select="/vnml/project/market/index[@name='SOFR_DF']" show=""/>
+                </market>
+                <model select="/vnml/project/model[@name='${select(/vnml/project/portfolio/instrument/appInfo/userSelected/model/@name)}']" show=""/>
+                <calculator override="DEEP" select="/vnml/project/calculator" show="*">
+                    <curveBasedAnalytics useCurve="true"/>
+                </calculator>
+                <analytics>
+                    <evaluation>
+                        <date select="/vnml/project/portfolio/instrument/appInfo/evaluation/date"/>
+                    </evaluation>
+                    <price>
+                        <amount select="//portfolio//appInfo/userSelected/solveFor/price/amount[//portfolio//appInfo/userSelected/solveFor/price/@selected!='true'] | //portfolio//appInfo/userSelected//solveFor/emptyValue/price/amount[//portfolio//appInfo/userSelected/solveFor/price/@selected='true']"/>
+                    </price>
+                    <accruedInterest>
+                        <amount>0</amount>
+                    </accruedInterest>
+                    <oas>
+                        <spread select="//portfolio//appInfo/userSelected/solveFor/oas/spread[//portfolio//appInfo/userSelected/solveFor/oas/@selected!='true'] | //portfolio//appInfo/userSelected//solveFor/emptyValue/oas/spread[//portfolio//appInfo/userSelected/solveFor/oas/@selected='true']" unit="BPS"/>
+                    </oas>
+                    <coupon>
+                        <rate select="//portfolio//appInfo/userSelected/solveFor/coupon/rate[//portfolio//appInfo/userSelected/solveFor/coupon/@selected!='true'] | //portfolio//appInfo/userSelected//solveFor/emptyValue/coupon/rate[//portfolio//appInfo/userSelected/solveFor/coupon/@selected='true']" unit="PERCENT"/>
+                    </coupon>
+                    <components>
+                        <pay>
+                            <price>
+                                <amount/>
+                            </price>
+                            <accruedInterest>
+                                <amount/>
+                            </accruedInterest>
+                        </pay>
+                        <receive>
+                            <price>
+                                <amount/>
+                            </price>
+                            <accruedInterest>
+                                <amount/>
+                            </accruedInterest>
+                        </receive>
+                    </components>
+                </analytics>
+                <instrument select="/vnml/project/portfolio/instrument" show="*">
+                    <appInfo override="SHALLOW"/>
+                </instrument>
+            </valuation>
+        </group>
+        <group name="Vanilla_Swap_LHS">
+            <valuation name="schedule">
+                <market date="${select(/vnml/project/market/@date)}">
+                    <index select="/vnml/project/market/index[@name='SOFR_DF']" show=""/>
+                </market>
+                <model select="/vnml/project/model[@name='${select(/vnml/project/portfolio/instrument/appInfo/userSelected/model/@name)}']" show=""/>
+                <calculator select="/vnml/project/calculator" show=""/>
+                <analytics>
+                    <evaluation>
+                        <date select="/vnml/project/portfolio/instrument/appInfo/evaluation/date"/>
+                    </evaluation>
+                    <price>
+                        <amount select="vn:link(/vnml/project/group[1], valuation[@name='security']/analytics/price/amount)"/>
+                    </price>
+                    <schedule>
+                        <file>
+                            <content/>
+                        </file>
+                    </schedule>
+                </analytics>
+                <instrument select="/vnml/project/portfolio/instrument" show="*">
+                    <appInfo override="SHALLOW"/>
+                </instrument>
+            </valuation>
+            <valuation name="analytics">
+                <market date="${select(/vnml/project/market/@date)}">
+                    <index select="/vnml/project/market/index[@name='SOFR_DF']" show=""/>
+                </market>
+                <model select="/vnml/project/model[@name='${select(/vnml/project/portfolio/instrument/appInfo/userSelected/model/@name)}']" show=""/>
+                <calculator override="DEEP" select="/vnml/project/calculator" show="">
+                    <curveBasedAnalytics useCurve="false"/>
+                </calculator>
+                <analytics>
+                    <evaluation>
+                        <date select="/vnml/project/portfolio/instrument/appInfo/evaluation/date"/>
+                    </evaluation>
+                    <price>
+                        <amount select="vn:link(/vnml/project/group[1], valuation[@name='security']/analytics/price/amount)"/>
+                    </price>
+                    <duration>
+                        <sensitivity>
+                            <dv01>
+                                <sensitivity/>
+                            </dv01>
+                        </sensitivity>
+                    </duration>
+                </analytics>
+                <instrument show="*">
+                    <fixedBond override="DEEP" select="/vnml/project/portfolio/instrument//fixedBond" show="*">
+                        <notional>
+                            <amount>100</amount>
+                        </notional>
+                        <coupon>
+                            <rate select="vn:link(/vnml/project/group[1], valuation[@name='security']/analytics/coupon/rate)" unit="PERCENT"/>
+                        </coupon>
+                    </fixedBond>
+                    <event>
+                        <commitment>
+                            <settlement>
+                                <date select="/vnml/project//instrument/appInfo/settlement/date"/>
+                            </settlement>
+                        </commitment>
+                    </event>
+                    <conversionDayCount select="/vnml/project/market/index[@name='SOFR_DF']/curve/quote[1]/date/@dayCount"/>
+                </instrument>
+            </valuation>
+        </group>
+    </project>
+</vnml>

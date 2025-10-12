@@ -36,8 +36,8 @@ class DefaultTaskExecutor:
         valuation_element = etree.fromstring(xml_payload)
         amount_nodes = valuation_element.xpath(".//analytics/price/amount")
 
-        if amount_nodes:
-            amount_nodes[0].text = self._generate_amount()
+        # if amount_nodes:
+            # amount_nodes[0].text = self._generate_amount()
 
         return etree.tostring(valuation_element, encoding="UTF-8").decode("UTF-8")
 

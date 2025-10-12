@@ -25,6 +25,7 @@ const REQUEST_RUNNER = path.join(repoRoot, 'services/vnvs/app/local_runner.py');
 const REQUEST_XML_PATH = path.join(repoRoot, 'resources/request.xml');
 const REQUEST2_XML_PATH = path.join(repoRoot, 'resources/request2.xml');
 const REQUEST3_XML_PATH = path.join(repoRoot, 'resources/request3.xml');
+const REQUEST4_XML_PATH = path.join(repoRoot, 'resources/request4.xml');
 
 const REDIS_URL = resolveTestRedisUrl();
 
@@ -135,6 +136,17 @@ test('integration: mock executor returns fixed amount', { concurrency: false }, 
   assert.equal(status.status, 'succeeded');
 });
 
+test('integration: sync submission for request4.xml', { concurrency: false }, async (t) => {
+  const harness = await createHarness(REQUEST4_XML_PATH, t);
+  const { submissionService, queryService, xml } = harness;
+
+  const result = await submissionService.submit({ xml, sync: true });
+  assert.equal(result.status, 'completed');
+  console.log('responseXml: ', format(result['responseXml']))
+  assert.ok(result.responseXml);
+  const status = await queryService.getStatus(result.requestId);
+  assert.equal(status.status, 'succeeded');
+});
 
 async function createHarness(request_xml_path, t, executorType = 'default') {
   const xml = await readFile(request_xml_path, 'utf8');

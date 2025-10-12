@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections import deque
-from typing import Deque, Dict, List, Optional, Sequence, Tuple, Set
+from typing import Deque, Dict, List, Optional, Sequence, Tuple, Set, Union
 
 from lxml import etree
 
@@ -638,7 +638,7 @@ class SelectHydrationStrategy(HydrationStrategy):
     """Resolves ``select`` attributes by cloning referenced nodes."""
 
     def __init__(self) -> None:
-        self._reference_cache: dict[str, etree._Element] = {}
+        self._reference_cache: dict[str, Optional[Union[etree._Element, str]]] = {}
         self._link_cache: dict[Tuple[str, str], Optional[etree._Element]] = {}
 
     def apply(
@@ -666,47 +666,60 @@ class SelectHydrationStrategy(HydrationStrategy):
                         raise HydrationError(
                             "Encountered select attribute without a value during hydration."
                         )
-                    replacement_source = self._resolve_reference(
+                    resolved_value = self._resolve_reference(
                         select_expr,
                         document_root,
                         item.context_node,
                     )
-
                     parent = node.getparent()
                     if parent is None:
                         raise HydrationError(
                             f"Cannot hydrate element <{node.tag}> without a parent; select expression '{select_expr}' is invalid."
                         )
 
-                    if replacement_source is None:
+                    if resolved_value is None:
                         continue
-                    if select_expr.strip().startswith("vn:link("):
-                        merged = copy.deepcopy(replacement_source)
-                    else:
-                        merged = _merge_elements(node, replacement_source, ignore_local_attrs={"select"})
-
-                    insertion_index = parent.index(node)
-                    tail_text = node.tail
-                    parent.remove(node)
-
-                    hydrated_replacements = engine.hydrate_element(
-                        merged,
-                        document_root,
-                        context_node=item.context_node,
-                    )
-                    if not hydrated_replacements:
-                        raise HydrationError(
-                            f"Hydration produced no nodes for select expression '{select_expr}'."
-                        )
-
-                    for offset, replacement_item in enumerate(hydrated_replacements):
-                        replacement = replacement_item.element
-                        replacement.attrib.pop("select", None)
-                        if offset == len(hydrated_replacements) - 1:
-                            replacement.tail = tail_text
+                    replacement_elements: List[etree._Element] = []
+                    if isinstance(resolved_value, etree._Element):
+                        if select_expr.strip().startswith("vn:link("):
+                            merged = copy.deepcopy(resolved_value)
                         else:
-                            replacement.tail = None
-                        parent.insert(insertion_index + offset, replacement)
+                            merged = _merge_elements(node, resolved_value, ignore_local_attrs={"select"})
+
+                        hydrated_replacements = engine.hydrate_element(
+                            merged,
+                            document_root,
+                            context_node=item.context_node,
+                        )
+                        if not hydrated_replacements:
+                            raise HydrationError(
+                                f"Hydration produced no nodes for select expression '{select_expr}'."
+                            )
+                        replacement_elements = [rep.element for rep in hydrated_replacements]
+                    else:
+                        if len(node):
+                            raise HydrationError(
+                                f"Select expression '{select_expr}' resolved to a scalar value but element <{node.tag}> has children."
+                            )
+                        replacement = copy.deepcopy(node)
+                        replacement.attrib.pop("select", None)
+                        for child in list(replacement):
+                            replacement.remove(child)
+                        replacement.text = str(resolved_value)
+                        replacement_elements = [replacement]
+
+                    if replacement_elements:
+                        insertion_index = parent.index(node)
+                        tail_text = node.tail
+                        parent.remove(node)
+
+                        for offset, replacement in enumerate(replacement_elements):
+                            replacement.attrib.pop("select", None)
+                            if offset == len(replacement_elements) - 1:
+                                replacement.tail = tail_text
+                            else:
+                                replacement.tail = None
+                            parent.insert(insertion_index + offset, replacement)
 
             processed.append(item)
         return processed
@@ -716,7 +729,7 @@ class SelectHydrationStrategy(HydrationStrategy):
         select_expr: str,
         document_root: etree._Element,
         context_node: Optional[etree._Element],
-    ) -> etree._Element:
+    ) -> Optional[Union[etree._Element, str]]:
         expanded_expr = _substitute_select_placeholders(select_expr, document_root, context_node)
         alternatives = _split_xpath_alternatives(expanded_expr)
 
@@ -741,7 +754,7 @@ class SelectHydrationStrategy(HydrationStrategy):
         candidate: str,
         document_root: etree._Element,
         context_node: Optional[etree._Element],
-    ) -> Optional[etree._Element]:
+    ) -> Optional[Union[etree._Element, str]]:
         stripped = candidate.strip()
         if stripped.startswith("vn:link(") and stripped.endswith(")"):
             return self._evaluate_link_expression(stripped, document_root, context_node)
@@ -750,8 +763,8 @@ class SelectHydrationStrategy(HydrationStrategy):
             cache_key = candidate
             if cache_key not in self._reference_cache:
                 matches = document_root.xpath(candidate)
-                element = self._validate_optional_match(candidate, matches)
-                self._reference_cache[cache_key] = element
+                value = self._validate_optional_match(candidate, matches)
+                self._reference_cache[cache_key] = value
             return self._reference_cache[cache_key]
 
         if context_node is None:
@@ -853,15 +866,31 @@ class SelectHydrationStrategy(HydrationStrategy):
             )
         return elements[0]
 
-    def _validate_optional_match(self, select_expr: str, matches: Sequence[object]) -> Optional[etree._Element]:
+    def _validate_optional_match(self, select_expr: str, matches: Sequence[object]) -> Optional[Union[etree._Element, str]]:
         elements = [match for match in matches if isinstance(match, etree._Element)]
-        if not elements:
-            return None
-        if len(elements) != 1:
+        scalars = [match for match in matches if not isinstance(match, etree._Element)]
+
+        if elements and scalars:
             raise HydrationError(
-                f"Select expression '{select_expr}' resolved to {len(elements)} elements; expected exactly one."
+                f"Select expression '{select_expr}' returned a mix of elements and scalar values, which is not supported."
             )
-        return elements[0]
+
+        if elements:
+            if len(elements) != 1:
+                raise HydrationError(
+                    f"Select expression '{select_expr}' resolved to {len(elements)} elements; expected exactly one."
+                )
+            return elements[0]
+
+        if scalars:
+            if len(scalars) != 1:
+                raise HydrationError(
+                    f"Select expression '{select_expr}' resolved to {len(scalars)} values; expected exactly one."
+                )
+            value = scalars[0]
+            return str(value)
+
+        return None
 
     def _validate_match(self, select_expr: str, matches: Sequence[object]) -> etree._Element:
         elements = [match for match in matches if isinstance(match, etree._Element)]

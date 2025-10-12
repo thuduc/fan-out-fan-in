@@ -10,6 +10,7 @@ if str(APP_ROOT) not in sys.path:
 
 from hydration.engine import HydrationEngine
 from hydration.strategies import AttributeSelectHydrationStrategy, SelectHydrationStrategy
+from exceptions import HydrationError
 
 
 class SelectHydrationStrategyTests(unittest.TestCase):
@@ -276,6 +277,37 @@ class SelectHydrationStrategyTests(unittest.TestCase):
         self.assertIsNone(model.get("select"))
         self.assertEqual(model.get("name"), "href-pure")
         self.assertEqual(model.xpath("./description/text()"), ["Copied"])
+
+    def test_select_attribute_value_sets_text(self):
+        xml = """
+        <root>
+            <source attr="ACT_365"/>
+            <wrapper>
+                <conversionDayCount select="/root/source/@attr"/>
+            </wrapper>
+        </root>
+        """
+        hydrated_wrapper = self._hydrate_fragment(xml, "//wrapper")
+        conversion = hydrated_wrapper.find("conversionDayCount")
+        self.assertIsNotNone(conversion)
+        self.assertEqual(conversion.text, "ACT_365")
+        self.assertEqual(len(conversion), 0)
+        self.assertIsNone(conversion.get("select"))
+
+    def test_select_attribute_value_with_children_raises(self):
+        xml = """
+        <root>
+            <source attr="ACT_365"/>
+            <wrapper>
+                <conversionDayCount select="/root/source/@attr"><child/></conversionDayCount>
+            </wrapper>
+        </root>
+        """
+        parser = etree.XMLParser(remove_comments=False)
+        root = etree.fromstring(xml, parser=parser)
+        with self.assertRaises(HydrationError):
+            wrapper = root.xpath("//wrapper")[0]
+            self.engine.hydrate_element(wrapper, root)
 
 
 if __name__ == "__main__":
