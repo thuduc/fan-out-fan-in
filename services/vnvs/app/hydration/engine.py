@@ -44,13 +44,13 @@ class HydrationEngine:
                 AttributeSelectHydrationStrategy,
                 HrefHydrationStrategy,
                 SelectHydrationStrategy,
-                UseFunctionHydrationStrategy,
+                UseHydrationStrategy,
             )
 
             href_strategy = HrefHydrationStrategy()
             strategies = [
                 href_strategy,
-                UseFunctionHydrationStrategy(),
+                UseHydrationStrategy(),
                 AttributeSelectHydrationStrategy(),
                 SelectHydrationStrategy(),
                 href_strategy,

@@ -430,7 +430,7 @@ def _strip_namespace(value: str) -> Tuple[str, str]:
     return prefix, func
 
 
-class UseFunctionHydrationStrategy(HydrationStrategy):
+class UseHydrationStrategy(HydrationStrategy):
     """Expands elements with vn:use function calls (e.g., vn:link).
 
     Supports vn:link(xpath, childName) which clones the element for each child
@@ -473,8 +473,45 @@ class UseFunctionHydrationStrategy(HydrationStrategy):
         use_attr: str,
         document_root: etree._Element,
     ) -> List[HydrationItem]:
-        """Parse and execute use function, returning cloned items."""
-        prefix, remainder = _strip_namespace(use_attr.split("(", 1)[0])
+        """Parse and execute use directive, returning cloned items."""
+        stripped = use_attr.strip()
+        if stripped.startswith(f"{self.SUPPORTED_NAMESPACE}:"):
+            return self._expand_custom_use(item, stripped, document_root)
+        return self._expand_plain_xpath(item, stripped, document_root)
+
+    def _expand_plain_xpath(
+        self,
+        item: HydrationItem,
+        xpath_expr: str,
+        document_root: etree._Element,
+    ) -> List[HydrationItem]:
+        if not xpath_expr:
+            raise HydrationError("use attribute must not be empty.")
+
+        if xpath_expr.startswith("/"):
+            matches = document_root.xpath(xpath_expr)
+        else:
+            context = item.context_node or item.element
+            matches = context.xpath(xpath_expr)
+
+        elements = [match for match in matches if isinstance(match, etree._Element)]
+        if not elements:
+            raise HydrationError(f"use XPath '{xpath_expr}' did not resolve to any elements.")
+
+        clones: List[HydrationItem] = []
+        for target in elements:
+            clone = copy.deepcopy(item.element)
+            clone.attrib.pop("use", None)
+            clones.append(HydrationItem(element=clone, context_node=target))
+        return clones
+
+    def _expand_custom_use(
+        self,
+        item: HydrationItem,
+        use_attr: str,
+        document_root: etree._Element,
+    ) -> List[HydrationItem]:
+        prefix, _ = _strip_namespace(use_attr.split("(", 1)[0])
         if prefix != self.SUPPORTED_NAMESPACE:
             raise HydrationError(
                 f"Unsupported custom hydration namespace '{prefix}' in '{use_attr}'."

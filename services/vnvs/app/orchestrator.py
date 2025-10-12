@@ -14,7 +14,7 @@ from typing import Dict, Iterable, List, Optional
 
 from .task_invoker import TaskInvoker
 from .hydration.engine import HydrationEngine, HydrationStrategy
-from .hydration.strategies import HrefHydrationStrategy, SelectHydrationStrategy, UseFunctionHydrationStrategy
+from .hydration.strategies import HrefHydrationStrategy, SelectHydrationStrategy, UseHydrationStrategy
 from .hydration.fetchers.s3 import S3ResourceFetcher
 
 from .constants import (
@@ -70,7 +70,7 @@ class RequestOrchestrator:
             engine = HydrationEngine(
                 strategies=[
                     href_strategy,
-                    UseFunctionHydrationStrategy(),
+                    UseHydrationStrategy(),
                     SelectHydrationStrategy(),
                     href_strategy,
                 ]
