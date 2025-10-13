@@ -2,12 +2,17 @@ import importlib.util
 import os
 import sys
 import unittest
+from pathlib import Path
 
 from redis import Redis
 
 os.environ.setdefault('REDIS_URL', 'redis://127.0.0.1:6379/14')
 
-# from app.hydrator import XmlHydrator
+# Ensure vnvs app package is importable when tests execute directly
+APP_ROOT = Path(__file__).resolve().parents[1]
+if str(APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(APP_ROOT))
+
 from app.orchestrator import RequestOrchestrator
 from app.constants import (
     REQUEST_LIFECYCLE_STREAM,
@@ -104,6 +109,29 @@ class RequestOrchestratorIntegrationTests(unittest.TestCase):
 
         failure_payload = self.redis.get(f"cache:request:{request_id}:failure")
         self.assertIsNotNone(failure_payload)
+
+    def test_attribute_select_prepass(self):
+        request_id = "req-attribute-1"
+        xml_key = f"cache:request:{request_id}:xml"
+        response_key = f"cache:request:{request_id}:response"
+        xml = (
+            "<req alias='${select(/req/project/group[2]/@name)}'><project>"
+            "<market name='m1'/><model name='mod1'/>"
+            "<group name='g1'><valuation name='security'><instrument ref-name='i1'/></valuation></group>"
+            "<group name='g2'><valuation name='schedule'><instrument ref-name='i2'/></valuation></group>"
+            "</project></req>"
+        )
+        self.redis.set(xml_key, xml)
+
+        self.orchestrator.run({
+            "requestId": request_id,
+            "xmlKey": xml_key,
+            "responseKey": response_key,
+        })
+
+        stored_response = self.redis.get(response_key)
+        self.assertIsNotNone(stored_response)
+        self.assertIn("alias=\"g2\"", stored_response)
 
     # ------------------------------------------------------------------
 

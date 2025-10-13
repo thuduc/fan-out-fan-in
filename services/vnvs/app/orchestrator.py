@@ -14,7 +14,12 @@ from typing import Dict, Iterable, List, Optional
 
 from .task_invoker import TaskInvoker
 from .hydration.engine import HydrationEngine, HydrationStrategy
-from .hydration.strategies import HrefHydrationStrategy, SelectHydrationStrategy, UseHydrationStrategy
+from .hydration.strategies import (
+    AttributeSelectHydrationStrategy,
+    HrefHydrationStrategy,
+    SelectHydrationStrategy,
+    UseHydrationStrategy,
+)
 from .hydration.fetchers.s3 import S3ResourceFetcher
 
 from .constants import (
@@ -99,6 +104,12 @@ class RequestOrchestrator:
             root = etree.fromstring(raw_xml.encode("UTF-8"))
         except etree.XMLSyntaxError as exc:
             raise ValueError("Input XML is not well-formed.") from exc
+
+        # Resolve ${select(...)} attribute placeholders before the main hydration pipeline
+        attribute_engine = HydrationEngine(strategies=[AttributeSelectHydrationStrategy()])
+        attribute_items = attribute_engine.hydrate_element(root, root)
+        if attribute_items:
+            root = attribute_items[0].element
 
         hydrated_items = self._hydration_engine.hydrate_element(root, root)
         if hydrated_items:
