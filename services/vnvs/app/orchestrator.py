@@ -142,6 +142,7 @@ class RequestOrchestrator:
         root = self.remove_child_nodes(
             root,
             [
+                "/vnml/project/appInfo",
                 "/vnml/project/market",
                 "/vnml/project/model",
                 "/vnml/project/calculator",
@@ -207,6 +208,7 @@ class RequestOrchestrator:
         group_task_req_template = self.copy_without_nodes(
             root,
             [
+                "/vnml/project/appInfo",
                 "/vnml/project/market",
                 "/vnml/project/model",
                 "/vnml/project/calculator",

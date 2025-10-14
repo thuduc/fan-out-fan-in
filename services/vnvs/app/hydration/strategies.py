@@ -106,8 +106,6 @@ def _merge_elements(
             merged_child = _merge_elements(
                 local_child,
                 remote_child,
-                ignore_local_attrs=local_ignore,
-                ignore_remote_attrs=remote_ignore,
             )
             consumed_keys.add(key)
             consumed_signatures.add(_child_signature(remote_child))

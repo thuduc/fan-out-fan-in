@@ -309,6 +309,20 @@ class SelectHydrationStrategyTests(unittest.TestCase):
             wrapper = root.xpath("//wrapper")[0]
             self.engine.hydrate_element(wrapper, root)
 
+    def test_select_inside_model_with_use_context(self):
+        xml = Path("resources/request5.xml").read_bytes()
+        parser = etree.XMLParser(remove_comments=False)
+        root = etree.fromstring(xml, parser=parser)
+        valuation = root.xpath("//group/valuation")[0]
+        engine = HydrationEngine()
+        hydrated_items = engine.hydrate_element(valuation, root)
+        self.assertEqual(len(hydrated_items), 2)
+        sigma_values = [
+            item.element.xpath(".//model/volatility/hjm/factor/term/sigma/text()")[0]
+            for item in hydrated_items
+        ]
+        self.assertEqual(sigma_values, ["0.007811", "0.207811"])
+
 
 if __name__ == "__main__":
     unittest.main()

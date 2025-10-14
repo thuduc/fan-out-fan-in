@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?vnvs?>
+<vnml>
+    <project>
+        <market date="2025-08-29">
+            <index name="SOFR_DF"/>
+        </market>
+        <model name="HULL" show="*">
+            <volatility>
+                <name>Factor 1</name>
+                <hjm useCurrentCorporate="false">
+                    <factor>
+                        <term>
+                            <sigma>0.015</sigma>
+                            <beta>0.0</beta>
+                        </term>
+                        <rho>1.0</rho>
+                        <tau>0.0</tau>
+                    </factor>
+                    <rbar>1.0</rbar>
+                </hjm>
+            </volatility>
+        </model>
+        <portfolio>
+            <instrument name="i1" volatility="0.1">
+                <appInfo>
+                    <volatility>
+                        <sigma>0.007811</sigma>
+                    </volatility>
+                </appInfo>
+            </instrument>
+            <instrument name="i2" volatility="0.2">
+                <appInfo>
+                    <volatility>
+                        <sigma>0.207811</sigma>
+                    </volatility>
+                </appInfo>
+            </instrument>
+        </portfolio>
+        <group>
+            <valuation name="coupon" use="vn:link(/vnml/project/portfolio, instrument)">
+                <market date="${select(/vnml/project/market/@date)}">
+                    <index select="/vnml/project/market/index[1]"/>
+                </market>
+                <model select="/vnml/project/model[@name='HULL']" show="">
+                    <volatility>
+                        <hjm useCurrentCorporate="false">
+                            <factor>
+                                <term>
+                                    <sigma select="appInfo/volatility/sigma"/>
+                                </term>
+                            </factor>
+                        </hjm>
+                    </volatility>
+                </model>
+                <instrument select="." show=""/>
+                <analytics>
+                    <evaluation>
+                        <date>2025-08-29</date>
+                    </evaluation>
+                </analytics>
+            </valuation>
+        </group>
+    </project>
+</vnml>
