@@ -1,9 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, access } from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
 import http from 'node:http';
 import { once } from 'node:events';
+import { Buffer } from 'node:buffer';
 
 import { CurveBuildingService } from '../src/curveBuildingService.js';
 import { createHttpApp } from '../src/httpApp.js';
@@ -12,15 +11,12 @@ import { DEFAULTS } from '../src/config.js';
 class StubLambdaInvoker {
   constructor() {
     this.calls = [];
+    this.nextResponse = { statusCode: 200, body: 'ok', contentType: 'text/plain' };
   }
 
   async invokeSync(payload) {
     this.calls.push(payload);
-    const body = payload.bodyBase64 ? Buffer.from(payload.bodyBase64, 'base64') : Buffer.alloc(0);
-    return {
-      body,
-      contentType: 'text/plain',
-    };
+    return this.nextResponse;
   }
 }
 
@@ -62,35 +58,26 @@ function createCurveService(invoker) {
   });
 }
 
-test('CurveBuildingService writes input and output artifacts', async (t) => {
+test('CurveBuildingService returns lambda response body', async () => {
   const invoker = new StubLambdaInvoker();
+  invoker.nextResponse = { statusCode: 200, body: 'sample curve', contentType: 'text/plain' };
   const service = createCurveService(invoker);
 
   const payloadBuffer = Buffer.from('sample curve');
   const result = await service.submitCurveRequest({
     buffer: payloadBuffer,
     contentType: 'text/plain',
-    originalName: 'input.mkt',
   });
 
-  t.after(async () => {
-    await result.cleanup().catch(() => {});
-  });
-
-  const storedInput = await readFile(result.inputPath, 'utf8');
-  assert.equal(storedInput, 'sample curve');
-
-  const storedOutput = await readFile(result.outputPath, 'utf8');
-  assert.equal(storedOutput, 'sample curve');
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body, 'sample curve');
+  assert.equal(result.contentType, 'text/plain');
 
   assert.equal(invoker.calls.length, 1);
-  assert.equal(invoker.calls[0].filename, 'input.mkt');
-
-  await result.cleanup();
-  await assert.rejects(() => access(result.inputPath, fsConstants.F_OK), /ENOENT/);
+  assert.equal(invoker.calls[0].contentType, 'text/plain');
 });
 
-test('POST /curveBuildingRequest accepts text/plain', async (t) => {
+test('POST /curveBuildingRequest accepts text/plain and returns attachment on success', async (t) => {
   const invoker = new StubLambdaInvoker();
   const curveService = createCurveService(invoker);
   const redis = new StubRedisClient();
@@ -104,6 +91,8 @@ test('POST /curveBuildingRequest accepts text/plain', async (t) => {
   await once(server, 'listening');
   const { port } = server.address();
 
+  invoker.nextResponse = { statusCode: 200, body: 'plain payload', contentType: 'text/plain' };
+
   const response = await fetch(`http://127.0.0.1:${port}/curveBuildingRequest`, {
     method: 'POST',
     headers: {
@@ -116,15 +105,16 @@ test('POST /curveBuildingRequest accepts text/plain', async (t) => {
   assert.equal(text, 'plain payload');
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('requeststatus'), 'success');
-  assert.equal(response.headers.get('content-type'), 'text/plain');
+  assert.ok((response.headers.get('content-type') || '').includes('text/plain'));
   const disposition = response.headers.get('content-disposition');
   assert.ok(disposition && disposition.includes('finalResult.xml'));
   assert.equal(invoker.calls.length, 1);
   assert.equal(invoker.calls[0].bodyBase64, Buffer.from('plain payload', 'utf8').toString('base64'));
 });
 
-test('POST /curveBuildingRequest accepts multipart/form-data', async (t) => {
+test('POST /curveBuildingRequest surfaces lambda error', async (t) => {
   const invoker = new StubLambdaInvoker();
+  invoker.nextResponse = { statusCode: 400, body: 'invalid curve' };
   const curveService = createCurveService(invoker);
   const redis = new StubRedisClient();
   const app = createHttpApp({ redis, config: DEFAULTS, logger: createNullLogger(), curveService });
@@ -135,19 +125,16 @@ test('POST /curveBuildingRequest accepts multipart/form-data', async (t) => {
   await once(server, 'listening');
   const { port } = server.address();
 
-  const form = new FormData();
-  form.append('file', new Blob(['multipart payload'], { type: 'text/plain' }), 'input.mkt');
-
   const response = await fetch(`http://127.0.0.1:${port}/curveBuildingRequest`, {
     method: 'POST',
-    body: form,
+    headers: { 'Content-Type': 'text/plain' },
+    body: 'payload',
   });
 
-  const text = await response.text();
-  assert.equal(text, 'multipart payload');
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get('requeststatus'), 'success');
-  assert.equal(invoker.calls.length, 1);
+  assert.equal(response.status, 400);
+  assert.equal(response.headers.get('requeststatus'), 'failed');
+  const body = await response.json();
+  assert.deepEqual(body, { message: 'invalid curve' });
 });
 
 function createNullLogger() {

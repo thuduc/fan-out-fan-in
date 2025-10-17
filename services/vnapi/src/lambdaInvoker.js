@@ -67,15 +67,10 @@ export class LambdaInvoker {
           };
         }
       }
-      const bodyBase64 = parsed.bodyBase64;
-      const bodyString = parsed.body;
-      const body = bodyBase64
-        ? Buffer.from(bodyBase64, 'base64')
-        : bodyString !== undefined
-          ? Buffer.from(bodyString, 'utf8')
-          : Buffer.alloc(0);
       return {
-        body,
+        body: parsed.body,
+        bodyBase64: parsed.bodyBase64,
+        statusCode: parsed.statusCode,
         contentType: parsed.contentType || 'text/plain',
         functionError: response.FunctionError,
         errorMessage: parsed.errorMessage || parsed.message,

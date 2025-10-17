@@ -1,10 +1,5 @@
-import { writeFile, mkdtemp, rm } from 'node:fs/promises';
-import path from 'node:path';
-import os from 'node:os';
-
 /**
  * Handles synchronous curve building requests by forwarding payloads to Lambda.
- * Persists request/response artifacts to temporary files for auditing.
  */
 export class CurveBuildingService {
   constructor({ lambdaInvoker, config, logger } = {}) {
@@ -17,43 +12,32 @@ export class CurveBuildingService {
   }
 
   /**
-   * Submits curve payload to downstream Lambda and returns file paths for response.
+   * Submits curve payload to downstream Lambda and returns response buffer.
    */
-  async submitCurveRequest({ buffer, contentType, originalName = 'curve.mkt' }) {
-    const tmpBase = await mkdtemp(path.join(os.tmpdir(), 'curve-'));
-    const inputPath = path.join(tmpBase, 'input.mkt');
-    const outputPath = path.join(tmpBase, 'finalResult.xml');
+  async submitCurveRequest({ buffer, contentType }) {
+    const payload = {
+      contentType,
+      bodyBase64: buffer.toString('base64'),
+    };
+    const response = await this.lambdaInvoker.invokeSync(payload, {
+      functionName: this.config.curveLambdaName,
+      timeoutMs: this.config.curveTimeoutMs,
+    });
 
-    try {
-      await writeFile(inputPath, buffer);
-      const payload = {
-        filename: originalName,
-        contentType,
-        bodyBase64: buffer.toString('base64'),
-      };
-      const response = await this.lambdaInvoker.invokeSync(payload, {
-        functionName: this.config.curveLambdaName,
-        timeoutMs: this.config.curveTimeoutMs,
-      });
-
-      if (response.functionError) {
-        const error = new Error(response.errorMessage || 'Curve Lambda failed');
-        error.statusCode = 502;
-        throw error;
-      }
-
-      const bodyBuffer = response.body ?? Buffer.alloc(0);
-      await writeFile(outputPath, bodyBuffer);
-
-      return {
-        inputPath,
-        outputPath,
-        contentType: response.contentType || 'text/plain',
-        cleanup: () => rm(tmpBase, { recursive: true, force: true }),
-      };
-    } catch (error) {
-      await rm(tmpBase, { recursive: true, force: true }).catch(() => {});
+    if (response.functionError) {
+      const error = new Error(response.errorMessage || 'Curve Lambda failed');
+      error.statusCode = 502;
       throw error;
     }
+
+    let body = response.bodyBase64
+      ? Buffer.from(response.bodyBase64, 'base64').toString('utf8')
+      : response.body ?? '';
+
+    return {
+      statusCode: response.statusCode ?? 200,
+      body,
+      contentType: response.contentType || 'text/plain',
+    };
   }
 }
