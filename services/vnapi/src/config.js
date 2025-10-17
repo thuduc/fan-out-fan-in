@@ -12,6 +12,12 @@ export const DEFAULTS = {
   syncWaitTimeoutMs: Number(process.env.SYNC_WAIT_TIMEOUT_MS || 120000),
   /** Lifecycle stream polling block duration in milliseconds (default: 1000) */
   lifecyclePollBlockMs: Number(process.env.LIFECYCLE_BLOCK_MS || 1000),
+  /** Maximum curve payload size in bytes (default: 5MB) */
+  curveMaxBytes: parseSize(process.env.CURVE_MAX_BYTES) || 5 * 1024 * 1024,
+  /** Target Lambda name for curve building requests */
+  curveLambdaName: process.env.CURVE_LAMBDA_NAME || 'glv-vnms',
+  /** Timeout for synchronous curve Lambda invocation in milliseconds */
+  curveTimeoutMs: Number(process.env.CURVE_TIMEOUT_MS || 15000),
 };
 
 /**

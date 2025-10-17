@@ -4,6 +4,7 @@ import { LifecyclePublisher } from './lifecyclePublisher.js';
 import { RequestSubmissionService } from './requestSubmissionService.js';
 import { RequestQueryService } from './requestQueryService.js';
 import { createHttpApp } from './httpApp.js';
+import { CurveBuildingService } from './curveBuildingService.js';
 
 export {
   MainOrchestrator,
@@ -12,6 +13,7 @@ export {
   RequestSubmissionService,
   RequestQueryService,
   createHttpApp,
+  CurveBuildingService,
 };
 
 export default {
@@ -21,4 +23,5 @@ export default {
   RequestSubmissionService,
   RequestQueryService,
   createHttpApp,
+  CurveBuildingService,
 };

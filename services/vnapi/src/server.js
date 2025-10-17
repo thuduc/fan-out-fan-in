@@ -5,6 +5,7 @@ import { MainOrchestrator } from './mainOrchestrator.js';
 import { RequestStateRepository } from './requestStateRepository.js';
 import { LifecyclePublisher } from './lifecyclePublisher.js';
 import { LambdaInvoker } from './lambdaInvoker.js';
+import { CurveBuildingService } from './curveBuildingService.js';
 
 async function bootstrap() {
   const logger = console;
@@ -20,6 +21,19 @@ async function bootstrap() {
     functionName: process.env.REQUEST_ORCHESTRATOR_ARN || 'glv-vnvs-request-orchestrator',
     logger,
   });
+  const curveInvoker = new LambdaInvoker({
+    functionName: DEFAULTS.curveLambdaName,
+    logger,
+    defaultInvocationType: 'RequestResponse',
+  });
+  const curveService = new CurveBuildingService({
+    lambdaInvoker: curveInvoker,
+    config: {
+      curveLambdaName: DEFAULTS.curveLambdaName,
+      curveTimeoutMs: DEFAULTS.curveTimeoutMs,
+    },
+    logger,
+  });
 
   const orchestrator = new MainOrchestrator({
     redis,
@@ -33,7 +47,7 @@ async function bootstrap() {
   orchestrator.ensureConsumerGroup().catch((error) => logger.error('Consumer group init failed', error));
   orchestrator.startPolling().catch((error) => logger.error('Polling loop stopped', error));
 
-  const app = createHttpApp({ redis, config: DEFAULTS, logger });
+  const app = createHttpApp({ redis, config: DEFAULTS, logger, curveService });
   const port = DEFAULTS.httpPort;
   app.listen(port, () => {
     logger.info(`HTTP server listening on port ${port}`);
