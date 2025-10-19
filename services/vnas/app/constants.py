@@ -1,4 +1,6 @@
 """Redis stream constants for vnas task processor."""
 
-# Redis stream for task completion/failure events (consumed by vnvs orchestrator)
-TASK_UPDATES_STREAM = "stream:task:updates"
+
+def task_updates_stream(request_id: str) -> str:
+    """Returns the task updates stream name for a specific request."""
+    return f"stream:task:updates:{request_id}"

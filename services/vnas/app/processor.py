@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Dict, Optional, TYPE_CHECKING
 
 try:
-    from .constants import TASK_UPDATES_STREAM
+    from .constants import task_updates_stream
 except ImportError:
-    from constants import TASK_UPDATES_STREAM
+    from constants import task_updates_stream
 
 try:
     from .executor import DefaultTaskExecutor, TaskExecutor
@@ -81,6 +81,7 @@ class TaskProcessor:
         """Publish task completion/failure event to task updates stream.
 
         """
+        stream_name = task_updates_stream(context.request_id)
         event = {
             "requestId": context.request_id,
             "groupIdx": str(context.group_index),
@@ -92,7 +93,7 @@ class TaskProcessor:
             "attempt": str(context.attempt),
             "result": stacktrace,
         }
-        self.redis.xadd(TASK_UPDATES_STREAM, event)
+        self.redis.xadd(stream_name, event)
 
     def _record_failure(self, context: TaskContext, failure: Dict[str, object]) -> None:
         """Record task failure details to Redis cache for debugging.

@@ -5,7 +5,7 @@ from redis import Redis
 from lxml import etree
 
 from app.processor import TaskProcessor
-from app.constants import TASK_UPDATES_STREAM
+from app.constants import task_updates_stream
 
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/13')
 
@@ -73,7 +73,8 @@ class TaskProcessorIntegrationTests(unittest.TestCase):
         self.assertGreaterEqual(generated_value, 50.0)
         self.assertLessEqual(generated_value, 100.0)
 
-        updates = self.redis.xrange(TASK_UPDATES_STREAM, '-', '+')
+        stream_name = task_updates_stream('req-1')
+        updates = self.redis.xrange(stream_name, '-', '+')
         update = fields_to_dict(updates[0])
         self.assertEqual(update['requestId'], 'req-1')
         self.assertEqual(result['status'], 'completed')
@@ -94,7 +95,8 @@ class TaskProcessorIntegrationTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             self.processor.handle_dispatch(entry)
 
-        updates = self.redis.xrange(TASK_UPDATES_STREAM, '-', '+')
+        stream_name = task_updates_stream('req-2')
+        updates = self.redis.xrange(stream_name, '-', '+')
         update = fields_to_dict(updates[0])
         self.assertEqual(update['status'], 'failed')
         failure = self.redis.get('cache:request:req-2:failure')

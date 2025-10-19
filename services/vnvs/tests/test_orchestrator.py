@@ -16,7 +16,6 @@ if str(APP_ROOT) not in sys.path:
 from app.orchestrator import RequestOrchestrator
 from app.constants import (
     REQUEST_LIFECYCLE_STREAM,
-    TASK_UPDATES_STREAM,
 )
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/14")

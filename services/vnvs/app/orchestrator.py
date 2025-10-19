@@ -27,11 +27,11 @@ from .constants import (
     REQUEST_LIFECYCLE_STREAM,
     REQUEST_STATE_KEY_TEMPLATE,
     TASK_RESULT_KEY_TEMPLATE,
-    TASK_UPDATES_STREAM,
     TASK_XML_KEY_TEMPLATE,
     DEFAULT_BLOCK_MS,
     TASK_WAIT_TIMEOUT_MS,
     MAX_TASK_RETRIES,
+    task_updates_stream,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -120,7 +120,6 @@ class RequestOrchestrator:
         group_count = project.xpath("count(./group)")
 
         self.logger.info("Processing request", extra={"requestId": request_id, "groups": group_count})
-        self._ensure_updates_consumer_group(request_id)
         self._update_request_state(request_id, status="started", group_count=group_count)
         self._publish_lifecycle(request_id, "started", {"groupCount": group_count})
 
@@ -131,12 +130,18 @@ class RequestOrchestrator:
                 task_descriptors = self._dispatch_group(request_id, index, group, root)
                 self._await_group_completion(request_id, index, task_descriptors, group)
                 self._publish_lifecycle(request_id, "group_completed", {"group": index})
-                
+
         except Exception as exc:  # noqa: BLE001
             self._record_request_failure(request_id, {
                 "error": str(exc),
                 "stage": "group_processing",
             })
+            # Clean up per-request task updates stream on failure
+            stream_name = task_updates_stream(request_id)
+            try:
+                self.redis.delete(stream_name)
+            except Exception:  # noqa: BLE001
+                pass
             raise
 
         root = self.remove_child_nodes(
@@ -162,6 +167,13 @@ class RequestOrchestrator:
             completedAt=_now_iso(),
         )
         self._publish_lifecycle(request_id, "completed", {"responseKey": response_key})
+
+        # Clean up per-request task updates stream
+        stream_name = task_updates_stream(request_id)
+        try:
+            self.redis.delete(stream_name)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("Unable to delete task updates stream", extra={"stream": stream_name, "error": str(exc)})
 
         # close redis connections
         close_redis(self.redis)
@@ -301,8 +313,8 @@ class RequestOrchestrator:
 
     def _await_group_completion(self, request_id: str, group_index: int, descriptors: List[TaskDescriptor], group: etree._Element) -> None:
         expected = len(descriptors)
-        consumer_group = self._consumer_group_name(request_id)
-        consumer = f"orchestrator-{int(time.time() * 1000) % 10000}"
+        stream_name = task_updates_stream(request_id)
+        last_id = '0-0'  # Start from beginning of stream
         deadline = time.time() + (TASK_WAIT_TIMEOUT_MS / 1000)
         completed = 0
         pending_failures: List[Dict[str, str]] = []
@@ -318,22 +330,18 @@ class RequestOrchestrator:
             if time.time() > deadline:
                 raise TimeoutError(f"Timed out waiting for group {group_index} completion")
 
-            entries = self.redis_task_update_stream.xreadgroup(
-                groupname=consumer_group,
-                consumername=consumer,
-                streams={TASK_UPDATES_STREAM: '>'},
+            entries = self.redis_task_update_stream.xread(
+                streams={stream_name: last_id},
                 count=expected,
                 block=DEFAULT_BLOCK_MS,
             )
             if not entries:
                 continue
 
-            for stream_name, messages in entries:
-                #print(f"Received {len(messages)} messages from stream {stream_name}")
-                if stream_name != TASK_UPDATES_STREAM:
-                    continue
+            for returned_stream_name, messages in entries:
                 for message_id, raw_values in messages:
-                    #print(f"Processing message {message_id} with values {raw_values}")
+                    last_id = message_id  # Track last seen message ID
+
                     if isinstance(raw_values, dict):
                         values = raw_values
                     else:
@@ -343,20 +351,15 @@ class RequestOrchestrator:
                             value = raw_values[idx + 1] if idx + 1 < len(raw_values) else None
                             values[field] = value
 
-                    entry_request_id = values.get("requestId")
-                    if entry_request_id != request_id:
-                        self.redis.xack(TASK_UPDATES_STREAM, consumer_group, message_id)
-                        continue
                     entry_group = int(values.get("groupIdx", "-1"))
                     if entry_group != group_index:
-                        # Another group's event; leave pending for the owning orchestrator instance
+                        # Skip messages for other groups
                         continue
 
                     status = values.get("status")
                     task_id = values.get("taskId")
                     descriptor = descriptor_by_task.get(task_id)
                     if descriptor is None:
-                        self.redis.xack(TASK_UPDATES_STREAM, consumer_group, message_id)
                         continue
 
                     if status == "completed":
@@ -383,7 +386,6 @@ class RequestOrchestrator:
                                 GROUP_STATE_KEY_TEMPLATE.format(request_id=request_id, group_index=group_index),
                                 mapping={"failed": len(pending_failures)}
                             )
-                    self.redis.xack(TASK_UPDATES_STREAM, consumer_group, message_id)
 
             if pending_failures:
                 self._record_request_failure(request_id, {
@@ -438,24 +440,6 @@ class RequestOrchestrator:
         self._publish_lifecycle(request_id, "failed", {"detail": json.dumps(detail)})
 
     # --- Lifecycle & state ---------------------------------------------------------------
-
-    def _ensure_updates_consumer_group(self, request_id: str) -> None:
-        group = self._consumer_group_name(request_id)
-        if not hasattr(self.redis, "xgroup_create"):
-            try:
-                self.redis.xgroupCreate(TASK_UPDATES_STREAM, group, "$", {"MKSTREAM": True})
-            except Exception as exc:  # noqa: BLE001
-                if "BUSYGROUP" not in str(exc):
-                    raise
-        else:
-            try:
-                self.redis.xgroup_create(TASK_UPDATES_STREAM, group, "$", mkstream=True)
-            except Exception as exc:  # noqa: BLE001
-                if "BUSYGROUP" not in str(exc):
-                    raise
-
-    def _consumer_group_name(self, request_id: str) -> str:
-        return f"req::{request_id}"
 
     def _publish_lifecycle(self, request_id: str, status: str, extra: Optional[Dict[str, object]] = None) -> None:
         payload = {"requestId": request_id, "status": status, "timestamp": time.time()}
