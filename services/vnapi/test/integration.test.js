@@ -27,6 +27,7 @@ const REQUEST2_XML_PATH = path.join(repoRoot, 'resources/request2.xml');
 const REQUEST3_XML_PATH = path.join(repoRoot, 'resources/request3.xml');
 const REQUEST4_XML_PATH = path.join(repoRoot, 'resources/request4.xml');
 const REQUEST5_XML_PATH = path.join(repoRoot, 'resources/request5.xml');
+const REQUEST6_XML_PATH = path.join(repoRoot, 'resources/request6.xml');
 
 const REDIS_URL = resolveTestRedisUrl();
 
@@ -151,6 +152,18 @@ test('integration: sync submission for request4.xml', { concurrency: false }, as
 
 test('integration: sync submission for request5.xml', { concurrency: false }, async (t) => {
   const harness = await createHarness(REQUEST5_XML_PATH, t);
+  const { submissionService, queryService, xml } = harness;
+
+  const result = await submissionService.submit({ xml, sync: true });
+  assert.equal(result.status, 'completed');
+  // console.log('responseXml: ', format(result['responseXml']))
+  assert.ok(result.responseXml);
+  const status = await queryService.getStatus(result.requestId);
+  assert.equal(status.status, 'succeeded');
+});
+
+test('integration: sync submission for request6.xml', { concurrency: false }, async (t) => {
+  const harness = await createHarness(REQUEST6_XML_PATH, t);
   const { submissionService, queryService, xml } = harness;
 
   const result = await submissionService.submit({ xml, sync: true });

@@ -132,6 +132,31 @@ class RequestOrchestratorIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(stored_response)
         self.assertIn("alias=\"g2\"", stored_response)
 
+    def test_processing_instruction_substitution(self):
+        request_id = "req-pi-1"
+        xml_key = f"cache:request:{request_id}:xml"
+        response_key = f"cache:request:{request_id}:response"
+        xml = (
+            "<?vnvs $NPATH = \"10000\"?>"
+            "<req><project><group name='g1'>"
+            "<valuation name='security'><instrument>"
+            "<monteCarlo><size>$NPATH</size></monteCarlo>"
+            "</instrument></valuation>"
+            "</group></project></req>"
+        )
+        self.redis.set(xml_key, xml)
+
+        self.orchestrator.run({
+            "requestId": request_id,
+            "xmlKey": xml_key,
+            "responseKey": response_key,
+        })
+
+        stored_response = self.redis.get(response_key)
+        self.assertIsNotNone(stored_response)
+        self.assertIn("<size>10000</size>", stored_response)
+        self.assertNotIn("$NPATH", stored_response)
+
     # ------------------------------------------------------------------
 
 

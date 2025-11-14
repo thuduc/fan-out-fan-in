@@ -310,7 +310,8 @@ class SelectHydrationStrategyTests(unittest.TestCase):
             self.engine.hydrate_element(wrapper, root)
 
     def test_select_inside_model_with_use_context(self):
-        xml = Path("resources/request5.xml").read_bytes()
+        # xml = Path("resources/request5.xml").read_bytes()
+        xml = (Path(__file__).resolve().parents[3] / "resources" / "request5.xml").read_bytes()
         parser = etree.XMLParser(remove_comments=False)
         root = etree.fromstring(xml, parser=parser)
         valuation = root.xpath("//group/valuation")[0]
