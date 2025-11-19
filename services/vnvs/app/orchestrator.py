@@ -23,7 +23,7 @@ from .hydration.strategies import (
 from .hydration.fetchers.s3 import S3ResourceFetcher
 from .processing_instructions import (
     apply_pi_variables,
-    parse_processing_instructions,
+    collect_pi_variables,
 )
 
 from .constants import (
@@ -104,13 +104,12 @@ class RequestOrchestrator:
         if raw_xml is None:
             raise ValueError(f"Request XML not found for key {xml_key}")
 
-        pi_variables = parse_processing_instructions(raw_xml)
-
         try:
             root = etree.fromstring(raw_xml.encode("UTF-8"))
         except etree.XMLSyntaxError as exc:
             raise ValueError("Input XML is not well-formed.") from exc
 
+        pi_variables = collect_pi_variables(root)
         if pi_variables:
             apply_pi_variables(root, pi_variables)
 

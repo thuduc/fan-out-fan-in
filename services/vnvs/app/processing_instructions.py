@@ -4,7 +4,6 @@ import re
 from typing import Dict
 from lxml import etree
 
-PI_BLOCK_PATTERN = re.compile(r"<\?vnvs(?P<body>.*?)\?>", flags=re.IGNORECASE | re.DOTALL)
 VAR_PATTERN = re.compile(
     r"\$(?P<name>[A-Za-z_][\w\.-]*)\s*=\s*(?P<value>\"[^\"]*\"|'[^']*'|[^\s]+)",
     flags=re.IGNORECASE,
@@ -12,19 +11,18 @@ VAR_PATTERN = re.compile(
 TOKEN_PATTERN = re.compile(r"\$(?P<name>[A-Za-z_][\w\.-]*)")
 
 
-def parse_processing_instructions(xml_text: str) -> Dict[str, str]:
+def collect_pi_variables(root: etree._Element) -> Dict[str, str]:
     """
-    Scan raw XML text for <?vnvs ...?> processing instructions and extract
-    $var = value assignments into a mapping. Later declarations override
-    earlier ones, matching common PI behavior.
+    Scan the XML document (prolog, subtree, epilog) for <?vnvs ...?>
+    processing instructions and extract variables.
+    Later declarations override earlier ones.
     """
-    if not xml_text or "<?vnvs" not in xml_text:
-        return {}
-
     variables: Dict[str, str] = {}
-    for block_match in PI_BLOCK_PATTERN.finditer(xml_text):
-        body = block_match.group("body") or ""
-        for var_match in VAR_PATTERN.finditer(body):
+
+    def parse_content(content: str) -> None:
+        if not content:
+            return
+        for var_match in VAR_PATTERN.finditer(content):
             name = var_match.group("name")
             raw_value = var_match.group("value") or ""
             value = raw_value
@@ -33,6 +31,29 @@ def parse_processing_instructions(xml_text: str) -> Dict[str, str]:
             ):
                 value = raw_value[1:-1]
             variables[name] = value
+
+    # 1. Prolog (preceding siblings of root)
+    # itersiblings(preceding=True) yields siblings in reverse document order (closest first)
+    # We reverse to process in document order
+    prolog = [
+        node
+        for node in root.itersiblings(preceding=True)
+        if isinstance(node, etree._ProcessingInstruction) and node.target == "vnvs"
+    ]
+    for node in reversed(prolog):
+        parse_content(node.text)
+
+    # 2. Subtree (inside root)
+    for node in root.iter(etree.ProcessingInstruction):
+        if node.target == "vnvs":
+            parse_content(node.text)
+
+    # 3. Epilog (following siblings of root)
+    # itersiblings() yields siblings in document order
+    for node in root.itersiblings():
+        if isinstance(node, etree._ProcessingInstruction) and node.target == "vnvs":
+            parse_content(node.text)
+
     return variables
 
 
